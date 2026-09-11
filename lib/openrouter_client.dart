@@ -45,15 +45,18 @@ class OpenRouterClient implements Summarizer {
   OpenRouterClient({
     required this.apiKey,
     this.model = defaultModel,
+    this.fallbackModel = defaultFallbackModel,
     this.baseUrl = defaultBaseUrl,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
   static const defaultModel = 'meta/muse-spark-1.3-contributor';
+  static const defaultFallbackModel = 'google/gemini-3.8-flash';
   static const defaultBaseUrl = 'https://openrouter.ai/api/v1';
 
   final String apiKey;
   final String model;
+  final String? fallbackModel;
   final String baseUrl;
   final http.Client _http;
 
@@ -67,6 +70,34 @@ class OpenRouterClient implements Summarizer {
   Stream<String> summarize({
     required List<int> jpeg,
     required SummaryLevel level,
+  }) async* {
+    final models = [
+      model,
+      if (fallbackModel != null && fallbackModel != model) fallbackModel!,
+    ];
+    OpenRouterException? lastError;
+    for (final candidate in models) {
+      try {
+        // NOTE: must be an explicit await-for, not yield*. Errors from
+        // a yield*-delegated stream bypass the surrounding try/catch.
+        await for (final text
+            in _streamOnce(jpeg: jpeg, level: level, model: candidate)) {
+          yield text;
+        }
+        return;
+      } on OpenRouterException catch (e) {
+        // Auth/billing failures won't heal by switching models.
+        if (e.statusCode == 401 || e.statusCode == 402) rethrow;
+        lastError = e;
+      }
+    }
+    throw lastError!;
+  }
+
+  Stream<String> _streamOnce({
+    required List<int> jpeg,
+    required SummaryLevel level,
+    required String model,
   }) async* {
     final request = http.Request(
       'POST',
@@ -82,6 +113,11 @@ class OpenRouterClient implements Summarizer {
       'model': model,
       'stream': true,
       'max_tokens': level.maxTokens,
+      'temperature': 0.3,
+      // Summarization needs minimal thought; default reasoning effort
+      // can burn the whole completion budget before answering
+      // (empty stream with finish_reason=length).
+      'reasoning': {'effort': 'low'},
       'messages': [
         {
           'role': 'system',
@@ -119,7 +155,7 @@ class OpenRouterClient implements Summarizer {
     }
     if (yielded == 0) {
       throw OpenRouterException.stream(
-        'Empty response from model ($stats)',
+        'Empty response from $model ($stats)',
       );
     }
   }

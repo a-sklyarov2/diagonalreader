@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:diagonal/openrouter_client.dart';
 import 'package:diagonal/summary_level.dart';
@@ -113,6 +114,66 @@ void main() {
             .toList(),
         throwsA(isA<OpenRouterException>()),
       );
+    });
+
+    test('falls back to secondary model on empty primary stream',
+        () async {
+      final seenModels = <String>[];
+      final mock = MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        seenModels.add(body['model'] as String);
+        if ((body['model'] as String).contains('muse-spark')) {
+          // Reasoning budget exhausted: role event + length finish.
+          return http.Response(
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+            'data: {"choices":[{"finish_reason":"length"}]}\n\n'
+            'data: [DONE]\n\n',
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        }
+        return http.Response(
+          'data: {"choices":[{"delta":{"content":"fallback text"}}]}\n\n'
+          'data: [DONE]\n\n',
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      });
+      final client = OpenRouterClient(
+        apiKey: 'test',
+        httpClient: mock,
+        fallbackModel: 'google/gemini-3.8-flash',
+      );
+      final out = await client
+          .summarize(jpeg: [1], level: SummaryLevel.mid)
+          .toList();
+      expect(out, ['fallback text']);
+      expect(seenModels, [
+        OpenRouterClient.defaultModel,
+        'google/gemini-3.8-flash',
+      ]);
+    });
+
+    test('sends low reasoning effort + temperature', () async {
+      Map<String, dynamic>? sent;
+      final mock = MockClient((request) async {
+        sent = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response('data: [DONE]\n\n', 200);
+      });
+      // Empty stream would trigger fallback; disable it here.
+      final client = OpenRouterClient(
+        apiKey: 'test',
+        httpClient: mock,
+        fallbackModel: null,
+      );
+      await expectLater(
+        () =>
+            client.summarize(jpeg: [1], level: SummaryLevel.mid).toList(),
+        throwsA(isA<OpenRouterException>()),
+      );
+      expect(sent?['reasoning'], {'effort': 'low'});
+      expect(sent?['temperature'], 0.3);
+      expect(sent?['max_tokens'], SummaryLevel.mid.maxTokens);
     });
   });
 }

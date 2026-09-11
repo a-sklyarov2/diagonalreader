@@ -22,9 +22,11 @@ extension SummaryLevelX on SummaryLevel {
       };
 
   int get maxTokens => switch (this) {
-        SummaryLevel.low => 1500,
-        SummaryLevel.mid => 800,
-        SummaryLevel.high => 400,
-        SummaryLevel.max => 150,
+        // Generous headroom: reasoning models spend completion budget
+        // on invisible thinking before answering.
+        SummaryLevel.low => 3000,
+        SummaryLevel.mid => 2000,
+        SummaryLevel.high => 1000,
+        SummaryLevel.max => 500,
       };
 }
