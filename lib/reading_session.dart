@@ -82,7 +82,13 @@ class ReadingSession extends ChangeNotifier {
       )) {
         page.append(delta);
       }
-      page.finish();
+      if (!page.hasContent && page.error == null) {
+        // Completing with zero content would leave a blank page
+        // with no way forward — surface it as a retryable error.
+        page.fail('Empty response from model');
+      } else {
+        page.finish();
+      }
     } catch (e) {
       page.fail(e);
     }

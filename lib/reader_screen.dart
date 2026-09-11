@@ -174,7 +174,9 @@ class _ReaderPage extends StatelessWidget {
             if (waiting)
               const ScanOverlay(key: Key('scanOverlay'))
             else
-              Container(color: Colors.black.withValues(alpha: 0.45)),
+              // Book pages blur to near-white, so the scrim must be
+              // dark enough for white text to stay readable.
+              Container(color: Colors.black.withValues(alpha: 0.68)),
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 64, 24, 96),
@@ -223,7 +225,7 @@ class _ReaderPage extends StatelessWidget {
             padding: const EdgeInsets.symmetric(
                 horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: Colors.black54,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
@@ -240,6 +242,13 @@ class _ReaderPage extends StatelessWidget {
               color: Colors.white,
               fontSize: 21,
               height: 1.55,
+              shadows: [
+                Shadow(
+                  color: Colors.black87,
+                  blurRadius: 8,
+                  offset: Offset(0, 1),
+                ),
+              ],
             ),
           ),
         ],

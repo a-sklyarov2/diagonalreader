@@ -41,6 +41,19 @@ void main() {
     expect(summarizer.seenLevels, [SummaryLevel.high]);
   });
 
+  test('empty stream becomes a retryable error, not a blank page',
+      () async {
+    final session = ReadingSession(
+      summarizer: FakeSummarizer(chunks: const []),
+      prepareImage: (_) async => [1],
+    );
+    final page = await session.startPage('/tmp/x.jpg', SummaryLevel.mid);
+    await Future.delayed(Duration.zero);
+    await Future.delayed(Duration.zero);
+    expect(page.hasContent, isFalse);
+    expect(page.error, contains('Empty response'));
+  });
+
   test('failure is captured on the page + retry works', () async {
     var fail = true;
     final summarizer = _ToggleSummarizer(() => fail);
