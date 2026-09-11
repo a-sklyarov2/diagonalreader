@@ -34,6 +34,30 @@ void main() {
         isNull,
       );
     });
+
+    test('throws the real message on SSE error payloads', () {
+      expect(
+        () => OpenRouterClient.deltaFromLine(
+          'data: {"error":{"message":"No endpoints found","code":404}}',
+        ),
+        throwsA(isA<OpenRouterException>().having(
+          (e) => e.toString(),
+          'message',
+          contains('No endpoints found'),
+        )),
+      );
+    });
+
+    test('accepts full message objects and records stats', () {
+      final stats = SseStats();
+      final text = OpenRouterClient.deltaFromLine(
+        'data: {"choices":[{"message":{"content":"Hi"},"finish_reason":"stop"}]}',
+        stats: stats,
+      );
+      expect(text, 'Hi');
+      expect(stats.dataEvents, 1);
+      expect(stats.finishReason, 'stop');
+    });
   });
 
   group('parseSse', () {
