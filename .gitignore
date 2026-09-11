@@ -1,2 +1,12 @@
 # env
 .env
+
+# Flutter/Dart
+.dart_tool/
+.build/
+build/
+*.freezed.dart
+*.g.dart
+android/.gradle/
+ios/Pods/
+linux/flutter/ephemeral/
