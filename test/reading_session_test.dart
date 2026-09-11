@@ -47,7 +47,7 @@ void main() {
       summarizer: FakeSummarizer(chunks: const []),
       prepareImage: (_) async => [1],
     );
-    final page = await session.startPage('/tmp/x.jpg', SummaryLevel.mid);
+    final page = await session.startPage('/tmp/x.jpg', SummaryLevel.high);
     await Future.delayed(Duration.zero);
     await Future.delayed(Duration.zero);
     expect(page.hasContent, isFalse);

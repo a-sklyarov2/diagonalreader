@@ -18,8 +18,8 @@ Future<void> main(List<String> args) async {
     exit(2);
   }
   final level = SummaryLevel.values.firstWhere(
-    (l) => l.name == (args.isNotEmpty ? args.first : 'mid'),
-    orElse: () => SummaryLevel.mid,
+    (l) => l.name == (args.isNotEmpty ? args.first : 'high'),
+    orElse: () => SummaryLevel.high,
   );
 
   final jpeg = await preparePageImage('test_images/page1.jpg');

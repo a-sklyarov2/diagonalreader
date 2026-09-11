@@ -1,18 +1,29 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import 'app_settings.dart';
 import 'camera_service.dart';
+import 'openrouter_client.dart';
 import 'reader_screen.dart';
 import 'reading_session.dart';
+import 'settings_screen.dart';
 import 'summary_level.dart';
 
 /// Fullscreen camera: pick a compression level, hit the big button,
 /// and the page is captured + sent for summarization immediately.
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key, required this.session, this.cameras});
+  const CameraScreen({
+    super.key,
+    required this.session,
+    this.cameras,
+    this.settings,
+    this.client,
+  });
 
   final ReadingSession session;
   final CameraService? cameras;
+  final AppSettings? settings;
+  final OpenRouterClient? client;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -23,7 +34,7 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _ready = false;
   String? _error;
   bool _capturing = false;
-  SummaryLevel _level = SummaryLevel.mid;
+  SummaryLevel _level = SummaryLevel.high;
 
   @override
   void initState() {
@@ -158,12 +169,13 @@ class _CameraScreenState extends State<CameraScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SegmentedButton<SummaryLevel>(
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SegmentedButton<SummaryLevel>(
                         segments: const [
                           ButtonSegment(
                               value: SummaryLevel.low, label: Text('Low')),
-                          ButtonSegment(
-                              value: SummaryLevel.mid, label: Text('Mid')),
                           ButtonSegment(
                               value: SummaryLevel.high,
                               label: Text('High')),
@@ -178,6 +190,24 @@ class _CameraScreenState extends State<CameraScreen> {
                           selectedForegroundColor: Colors.black,
                           selectedBackgroundColor: Colors.white,
                         ),
+                          ),
+                        ),
+                        if (widget.settings != null &&
+                            widget.client != null)
+                          IconButton(
+                            key: const Key('settingsButton'),
+                            icon: const Icon(Icons.more_vert,
+                                color: Colors.white),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => SettingsScreen(
+                                  settings: widget.settings!,
+                                  client: widget.client!,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                       ),
                       const SizedBox(height: 20),
                       GestureDetector(

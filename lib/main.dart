@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_settings.dart';
 import 'camera_screen.dart';
 import 'camera_service.dart';
 import 'openrouter_client.dart';
@@ -11,18 +12,37 @@ import 'reading_session.dart';
 const openRouterKey = String.fromEnvironment('OPENROUTER_KEY');
 const mockApi = String.fromEnvironment('MOCK_API');
 
-void main() {
-  runApp(const DiagonalApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final settings = await AppSettings.load();
+  runApp(DiagonalApp(settings: settings));
 }
 
 class DiagonalApp extends StatelessWidget {
-  const DiagonalApp({super.key, this.session, this.cameras});
+  const DiagonalApp({
+    super.key,
+    this.session,
+    this.cameras,
+    this.settings,
+    this.client,
+  });
 
   final ReadingSession? session;
   final CameraService? cameras;
+  final AppSettings? settings;
+  final OpenRouterClient? client;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveSettings = settings ?? AppSettings();
+    final effectiveClient = client ??
+        OpenRouterClient(
+          apiKey: openRouterKey,
+          model: effectiveSettings.modelId,
+          baseUrl: mockApi.isNotEmpty
+              ? mockApi
+              : OpenRouterClient.defaultBaseUrl,
+        );
     return MaterialApp(
       title: 'Diagonal',
       theme: ThemeData.dark(useMaterial3: true).copyWith(
@@ -32,16 +52,10 @@ class DiagonalApp extends StatelessWidget {
         ),
       ),
       home: CameraScreen(
-        session: session ??
-            ReadingSession(
-              summarizer: OpenRouterClient(
-                apiKey: openRouterKey,
-                baseUrl: mockApi.isNotEmpty
-                    ? mockApi
-                    : OpenRouterClient.defaultBaseUrl,
-              ),
-            ),
+        session: session ?? ReadingSession(summarizer: effectiveClient),
         cameras: cameras,
+        settings: effectiveSettings,
+        client: effectiveClient,
       ),
     );
   }

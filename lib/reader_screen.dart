@@ -25,21 +25,39 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   late final PageController _controller;
+  // Snapshot: no new pages can be added while the reader is on top
+  // (the camera sits underneath), so a local list keeps the PageView
+  // consistent across deletes.
+  late List<SummaryPage> _pages;
   late int _current;
-
-  List<SummaryPage> get _pages => widget.session.pages;
 
   @override
   void initState() {
     super.initState();
-    _current = widget.initialIndex;
-    _controller = PageController(initialPage: widget.initialIndex);
+    _pages = List.of(widget.session.pages);
+    _current = widget.initialIndex.clamp(0, _pages.length - 1);
+    _controller = PageController(initialPage: _current);
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  void _deleteCurrent() {
+    widget.session.deletePage(_pages[_current]);
+    setState(() {
+      _pages.removeAt(_current);
+      _current = _pages.isEmpty
+          ? 0
+          : _current.clamp(0, _pages.length - 1);
+    });
+    if (_pages.isEmpty) {
+      Navigator.of(context).pop();
+      return;
+    }
+    if (_controller.hasClients) _controller.jumpToPage(_current);
   }
 
   @override
@@ -91,7 +109,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ),
                     ),
                     const Spacer(),
-                    const SizedBox(width: 48),
+                    IconButton(
+                      key: const Key('deletePageButton'),
+                      icon: const Icon(Icons.delete,
+                          color: Colors.redAccent),
+                      tooltip: 'Delete summary',
+                      onPressed: _deleteCurrent,
+                    ),
                   ],
                 ),
               ),

@@ -52,10 +52,23 @@ class OpenRouterClient implements Summarizer {
 
   static const defaultModel = 'meta/muse-spark-1.3-contributor';
   static const defaultFallbackModel = 'google/gemini-3.8-flash';
+
+  /// Models offered in Settings. Defaults first, then the rest.
+  static const availableModels = [
+    defaultModel,
+    defaultFallbackModel,
+    'qwen/qwen3.6-flash',
+    'google/gemini-3.5-flash-lite',
+    'meta-llama/llama-4-maverick',
+    'x-ai/grok-4.3',
+    'google/gemma-4-31b-it',
+    'qwen/qwen3.8-flash',
+    'google/gemini-3.1-flash-lite',
+  ];
   static const defaultBaseUrl = 'https://openrouter.ai/api/v1';
 
   final String apiKey;
-  final String model;
+  String model;
   final String? fallbackModel;
   final String baseUrl;
   final http.Client _http;

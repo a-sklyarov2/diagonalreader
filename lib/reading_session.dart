@@ -40,7 +40,6 @@ class SummaryPage extends ChangeNotifier {
     notifyListeners();
   }
 }
-
 typedef ImagePreparer = Future<List<int>> Function(String path);
 
 /// Ordered history of summarized pages (oldest first). New captures are
@@ -71,6 +70,14 @@ class ReadingSession extends ChangeNotifier {
   Future<void> retry(SummaryPage page) {
     page.reset();
     return _run(page);
+  }
+
+  /// Remove a page from history (e.g. via the red bin button).
+  void deletePage(SummaryPage page) {
+    if (pages.remove(page)) {
+      page.dispose();
+      notifyListeners();
+    }
   }
 
   Future<void> _run(SummaryPage page) async {

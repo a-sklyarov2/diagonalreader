@@ -98,7 +98,7 @@ void main() {
         httpClient: mock,
       );
       final out = await client
-          .summarize(jpeg: [1, 2, 3], level: SummaryLevel.mid)
+          .summarize(jpeg: [1, 2, 3], level: SummaryLevel.high)
           .toList();
       expect(out.join(), 'Hi there');
     });
@@ -110,7 +110,7 @@ void main() {
           OpenRouterClient(apiKey: 'test', httpClient: mock);
       expect(
         () => client
-            .summarize(jpeg: [1], level: SummaryLevel.mid)
+            .summarize(jpeg: [1], level: SummaryLevel.high)
             .toList(),
         throwsA(isA<OpenRouterException>()),
       );
@@ -145,7 +145,7 @@ void main() {
         fallbackModel: 'google/gemini-3.8-flash',
       );
       final out = await client
-          .summarize(jpeg: [1], level: SummaryLevel.mid)
+          .summarize(jpeg: [1], level: SummaryLevel.high)
           .toList();
       expect(out, ['fallback text']);
       expect(seenModels, [
@@ -168,12 +168,12 @@ void main() {
       );
       await expectLater(
         () =>
-            client.summarize(jpeg: [1], level: SummaryLevel.mid).toList(),
+            client.summarize(jpeg: [1], level: SummaryLevel.high).toList(),
         throwsA(isA<OpenRouterException>()),
       );
       expect(sent?['reasoning'], {'effort': 'low'});
       expect(sent?['temperature'], 0.3);
-      expect(sent?['max_tokens'], SummaryLevel.mid.maxTokens);
+      expect(sent?['max_tokens'], SummaryLevel.high.maxTokens);
     });
   });
 }
