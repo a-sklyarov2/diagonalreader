@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 /// Minimal seam so Linux desktop / integration tests can run without
@@ -88,10 +89,51 @@ class FakeCameraService implements CameraService {
   Future<void> dispose() async {}
 }
 
-/// Factory: real camera on Android/iOS, fake everywhere else
+/// Linux/dev fake: cycles through bundled asset photos (the real page
+/// pictures in test_images/) so the full capture → summarize flow can be
+/// exercised on desktop without camera hardware.
+class AssetCycleCameraService implements CameraService {
+  AssetCycleCameraService({required this.assetPaths});
+
+  final List<String> assetPaths;
+  int _next = 0;
+
+  @override
+  CameraController? get controller => null;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<String?> takePicture() async {
+    final asset = assetPaths[_next % assetPaths.length];
+    _next++;
+    final data = await rootBundle.load(asset);
+    final file = File(
+      p.join(
+        Directory.systemTemp.path,
+        'page_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      ),
+    );
+    await file.writeAsBytes(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      flush: true,
+    );
+    return file.path;
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+/// Factory: real camera on Android/iOS, asset-cycling fake everywhere else
 /// (Linux desktop, tests) unless [forceFake] is set.
 CameraService createCameraService({bool forceFake = false}) {
   if (forceFake) return FakeCameraService();
   if (Platform.isAndroid || Platform.isIOS) return RealCameraService();
-  return FakeCameraService();
+  return AssetCycleCameraService(assetPaths: const [
+    'test_images/page1.jpg',
+    'test_images/page2.jpg',
+    'test_images/page3.jpg',
+  ]);
 }
