@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
-import 'package:diagonal/app_settings.dart';
 import 'package:diagonal/camera_service.dart';
 import 'package:diagonal/main.dart';
 import 'package:diagonal/openrouter_client.dart';
@@ -10,9 +9,6 @@ import 'package:diagonal/reading_session.dart';
 import 'package:diagonal/summary_level.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 /// In-memory camera: returns a pre-created file, no I/O at tap time
 /// (widget tests run in a fake-async zone where real I/O stalls).
@@ -130,53 +126,6 @@ void main() {
 
     expect(find.byKey(const Key('summaryError')), findsOneWidget);
     expect(find.byKey(const Key('retryButton')), findsOneWidget);
-  });
-
-  testWidgets('settings changes the model for new captures', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    final settings = AppSettings();
-    String? sentModel;
-    final mock = MockClient((request) async {
-      sentModel =
-          (jsonDecode(request.body) as Map<String, dynamic>)['model']
-              as String;
-      return http.Response(
-        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
-        'data: [DONE]\n\n',
-        200,
-        headers: {'content-type': 'text/event-stream'},
-      );
-    });
-    final client = OpenRouterClient(apiKey: 't', httpClient: mock);
-    await tester.pumpWidget(
-      DiagonalApp(
-        session: ReadingSession(
-          summarizer: client,
-          prepareImage: (_) async => [1, 2, 3],
-        ),
-        cameras: StaticPathCameraService(photoPath),
-        settings: settings,
-        client: client,
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('settingsButton')));
-    await tester.pumpAndSettle();
-    expect(find.text('Summary model'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('modelDropdown')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('google/gemini-3.5-flash-lite').last);
-    await tester.pumpAndSettle();
-    expect(settings.modelId, 'google/gemini-3.5-flash-lite');
-    expect(client.model, 'google/gemini-3.5-flash-lite');
-
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('captureButton')));
-    await tester.pumpAndSettle();
-    expect(sentModel, 'google/gemini-3.5-flash-lite');
   });
 
   testWidgets('red bin deletes summaries from history', (tester) async {

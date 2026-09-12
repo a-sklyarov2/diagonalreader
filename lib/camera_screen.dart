@@ -1,12 +1,9 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
-import 'app_settings.dart';
 import 'camera_service.dart';
-import 'openrouter_client.dart';
 import 'reader_screen.dart';
 import 'reading_session.dart';
-import 'settings_screen.dart';
 import 'summary_level.dart';
 
 /// Fullscreen camera: pick a compression level, hit the big button,
@@ -16,14 +13,10 @@ class CameraScreen extends StatefulWidget {
     super.key,
     required this.session,
     this.cameras,
-    this.settings,
-    this.client,
   });
 
   final ReadingSession session;
   final CameraService? cameras;
-  final AppSettings? settings;
-  final OpenRouterClient? client;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -169,10 +162,7 @@ class _CameraScreenState extends State<CameraScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: SegmentedButton<SummaryLevel>(
+                      SegmentedButton<SummaryLevel>(
                         segments: const [
                           ButtonSegment(
                               value: SummaryLevel.low, label: Text('Low')),
@@ -190,24 +180,6 @@ class _CameraScreenState extends State<CameraScreen> {
                           selectedForegroundColor: Colors.black,
                           selectedBackgroundColor: Colors.white,
                         ),
-                          ),
-                        ),
-                        if (widget.settings != null &&
-                            widget.client != null)
-                          IconButton(
-                            key: const Key('settingsButton'),
-                            icon: const Icon(Icons.more_vert,
-                                color: Colors.white),
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => SettingsScreen(
-                                  settings: widget.settings!,
-                                  client: widget.client!,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
                       ),
                       const SizedBox(height: 20),
                       GestureDetector(

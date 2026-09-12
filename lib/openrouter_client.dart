@@ -45,36 +45,21 @@ class OpenRouterClient implements Summarizer {
   OpenRouterClient({
     required this.apiKey,
     this.model = defaultModel,
-    this.fallbackModel = defaultFallbackModel,
     this.baseUrl = defaultBaseUrl,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
-  static const defaultModel = 'meta/muse-spark-1.3-contributor';
-  static const defaultFallbackModel = 'google/gemini-3.8-flash';
-
-  /// Models offered in Settings. Defaults first, then the rest.
-  static const availableModels = [
-    defaultModel,
-    defaultFallbackModel,
-    'qwen/qwen3.6-flash',
-    'google/gemini-3.5-flash-lite',
-    'meta-llama/llama-4-maverick',
-    'x-ai/grok-4.3',
-    'google/gemma-4-31b-it',
-    'qwen/qwen3.8-flash',
-    'google/gemini-3.1-flash-lite',
-  ];
+  static const defaultModel = 'google/gemini-3.5-flash-lite';
   static const defaultBaseUrl = 'https://openrouter.ai/api/v1';
 
   final String apiKey;
-  String model;
-  final String? fallbackModel;
+  final String model;
   final String baseUrl;
   final http.Client _http;
 
   static String buildUserPrompt(SummaryLevel level) =>
       'Summarize the text on this book page to ${level.target}. '
+      'Write the summary in the same language as the text on the page. '
       "Preserve the author's original style, voice, tone and terminology — "
       'write the summary as if the author wrote a shorter version themselves. '
       'Output ONLY the summary, no preamble, no commentary.';
@@ -84,27 +69,7 @@ class OpenRouterClient implements Summarizer {
     required List<int> jpeg,
     required SummaryLevel level,
   }) async* {
-    final models = [
-      model,
-      if (fallbackModel != null && fallbackModel != model) fallbackModel!,
-    ];
-    OpenRouterException? lastError;
-    for (final candidate in models) {
-      try {
-        // NOTE: must be an explicit await-for, not yield*. Errors from
-        // a yield*-delegated stream bypass the surrounding try/catch.
-        await for (final text
-            in _streamOnce(jpeg: jpeg, level: level, model: candidate)) {
-          yield text;
-        }
-        return;
-      } on OpenRouterException catch (e) {
-        // Auth/billing failures won't heal by switching models.
-        if (e.statusCode == 401 || e.statusCode == 402) rethrow;
-        lastError = e;
-      }
-    }
-    throw lastError!;
+    yield* _streamOnce(jpeg: jpeg, level: level, model: model);
   }
 
   Stream<String> _streamOnce({
