@@ -10,3 +10,8 @@ build/
 android/.gradle/
 ios/Pods/
 linux/flutter/ephemeral/
+
+# Server (Cloudflare Worker) — secrets + tooling, never commit
+server/node_modules/
+server/.dev.vars
+server/.wrangler/

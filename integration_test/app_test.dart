@@ -6,9 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-/// E2E against a local mock OpenRouter SSE server. The app is compiled
-/// with `--dart-define=MOCK_API=http://127.0.0.1:18080` so no real API
-/// key or spend is involved; the fake camera serves the real page photos.
+/// E2E against a local mock of our Cloudflare Worker. The app is compiled
+/// with `--dart-define=DIAGONAL_API=http://127.0.0.1:18080
+/// --dart-define=PROXY_TOKEN=test` so no real secrets or spend are involved;
+/// the fake camera serves the real page photos.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 

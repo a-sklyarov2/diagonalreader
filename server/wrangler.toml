@@ -1,0 +1,10 @@
+name = "diagonal-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# NOTE: account_id is an identifier, not a credential (the API token is
+# never stored here — pass it via CLOUDFLARE_API_TOKEN env var).
+account_id = "3a3c78db80d271226caeb10f8ba124e8"
+
+[vars]
+MODEL = "google/gemini-3.5-flash-lite"
