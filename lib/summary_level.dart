@@ -23,7 +23,7 @@ extension SummaryLevelX on SummaryLevel {
         // Generous headroom: reasoning models spend completion budget
         // on invisible thinking before answering.
         SummaryLevel.low => 3000,
-        SummaryLevel.high => 1000,
-        SummaryLevel.max => 500,
+        SummaryLevel.high => 1500,
+        SummaryLevel.max => 1000,
       };
 }

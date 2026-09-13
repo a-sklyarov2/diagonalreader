@@ -32,6 +32,7 @@ class StaticPathCameraService implements CameraService {
 
 class ScriptedSummarizer implements Summarizer {
   int calls = 0;
+  final List<SummaryLevel> seenLevels = [];
 
   @override
   Stream<String> summarize({
@@ -39,6 +40,7 @@ class ScriptedSummarizer implements Summarizer {
     required SummaryLevel level,
   }) async* {
     calls++;
+    seenLevels.add(level);
     yield 'Summary $calls.';
   }
 }
@@ -149,6 +151,33 @@ void main() {
     await tester.tap(find.byKey(const Key('deletePageButton')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('captureButton')), findsOneWidget);
+  });
+
+  testWidgets('resummarize menu reruns at the chosen level', (tester) async {
+    final summarizer = ScriptedSummarizer();
+    await tester.pumpWidget(
+      DiagonalApp(
+        session: ReadingSession(
+          summarizer: summarizer,
+          prepareImage: (_) async => [1, 2, 3],
+        ),
+        cameras: StaticPathCameraService(photoPath),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('captureButton')));
+    await tester.pumpAndSettle();
+    expect(find.text('Summary 1.'), findsOneWidget);
+    expect(summarizer.seenLevels, [SummaryLevel.high]);
+
+    await tester.tap(find.byKey(const Key('resummarizeButton')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('resummarize_low')));
+    await tester.pumpAndSettle();
+
+    expect(summarizer.seenLevels,
+        [SummaryLevel.high, SummaryLevel.low]);
+    expect(find.text('Summary 2.'), findsOneWidget);
   });
 }
 

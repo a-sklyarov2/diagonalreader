@@ -27,7 +27,7 @@ export const LEVELS = {
   max: {
     target:
       'a single sentence capturing the single most important point of the page',
-    maxTokens: 500,
+    maxTokens: 1000,
   },
 } as const;
 

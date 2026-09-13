@@ -1,15 +1,34 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
+import 'history_store.dart';
 import 'image_prep.dart';
 import 'openrouter_client.dart';
 import 'summary_level.dart';
 
 /// One captured page + its (streaming) summary.
 class SummaryPage extends ChangeNotifier {
-  SummaryPage({required this.photoPath, required this.level});
+  SummaryPage({
+    String? id,
+    required this.photoPath,
+    required this.level,
+  }) : id = id ?? '${DateTime.now().microsecondsSinceEpoch}';
 
+  /// Rebuild a finished page from permanent storage.
+  SummaryPage.restored({
+    required this.id,
+    required this.photoPath,
+    required this.level,
+    required String text,
+  }) {
+    _buffer.write(text);
+    done = true;
+  }
+
+  final String id;
   final String photoPath;
-  final SummaryLevel level;
+  SummaryLevel level;
 
   final StringBuffer _buffer = StringBuffer();
   String get text => _buffer.toString();
@@ -40,26 +59,57 @@ class SummaryPage extends ChangeNotifier {
     notifyListeners();
   }
 }
+
 typedef ImagePreparer = Future<List<int>> Function(String path);
 
 /// Ordered history of summarized pages (oldest first). New captures are
 /// appended; the reader scrolls vertically through them TikTok-style.
+/// With a [history] store, photos are kept permanently and the page
+/// index survives app restarts.
 class ReadingSession extends ChangeNotifier {
   ReadingSession({
     required Summarizer summarizer,
     ImagePreparer prepareImage = preparePageImage,
+    HistoryStore? history,
   })  : _summarizer = summarizer, // ignore: prefer_initializing_formals
-        _prepareImage = prepareImage; // ignore: prefer_initializing_formals
+        _prepareImage = prepareImage, // ignore: prefer_initializing_formals
+        _history = history; // ignore: prefer_initializing_formals
 
   final Summarizer _summarizer;
   final ImagePreparer _prepareImage;
+  final HistoryStore? _history;
 
   final List<SummaryPage> pages = [];
+
+  /// Load previously saved pages (call once at startup).
+  Future<void> restore() async {
+    final history = _history;
+    if (history == null) return;
+    for (final stored in await history.loadPages()) {
+      final level = SummaryLevel.values.asNameMap()[stored.levelName] ??
+          SummaryLevel.high;
+      pages.add(
+        SummaryPage.restored(
+          id: stored.id,
+          photoPath: stored.photoPath,
+          level: level,
+          text: stored.text,
+        ),
+      );
+    }
+    if (pages.isNotEmpty) notifyListeners();
+  }
 
   /// Capture a page: registers it immediately (UI can navigate to it)
   /// and streams the summary in the background.
   Future<SummaryPage> startPage(String photoPath, SummaryLevel level) async {
-    final page = SummaryPage(photoPath: photoPath, level: level);
+    var stored = photoPath;
+    final history = _history;
+    final id = '${DateTime.now().microsecondsSinceEpoch}';
+    if (history != null) {
+      stored = await history.keepPhoto(photoPath, id);
+    }
+    final page = SummaryPage(id: id, photoPath: stored, level: level);
     pages.add(page);
     notifyListeners();
     // Don't await: streaming progresses while the UI is already showing.
@@ -67,8 +117,15 @@ class ReadingSession extends ChangeNotifier {
     return page;
   }
 
-  Future<void> retry(SummaryPage page) {
+  Future<void> retry(SummaryPage page) =>
+      resummarize(page, page.level);
+
+  /// Re-run a summary, optionally at a different compression level.
+  /// The kept photo is resubmitted, so this works for old pages too.
+  Future<void> resummarize(SummaryPage page, SummaryLevel level) {
+    page.level = level;
     page.reset();
+    unawaited(_persist());
     return _run(page);
   }
 
@@ -77,6 +134,7 @@ class ReadingSession extends ChangeNotifier {
     if (pages.remove(page)) {
       page.dispose();
       notifyListeners();
+      unawaited(_persist());
     }
   }
 
@@ -99,5 +157,12 @@ class ReadingSession extends ChangeNotifier {
     } catch (e) {
       page.fail(e);
     }
+    unawaited(_persist());
+  }
+
+  Future<void> _persist() {
+    final history = _history;
+    if (history == null) return Future.value();
+    return history.savePages(pages);
   }
 }

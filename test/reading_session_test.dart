@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:diagonal/history_store.dart';
 import 'package:diagonal/openrouter_client.dart';
 import 'package:diagonal/reading_session.dart';
 import 'package:diagonal/summary_level.dart';
@@ -72,6 +75,57 @@ void main() {
     expect(page.text, 'recovered');
     expect(page.error, isNull);
     expect(page.done, isTrue);
+  });
+
+  test('resummarize switches level and resubmits', () async {
+    final summarizer = FakeSummarizer();
+    final session = ReadingSession(
+      summarizer: summarizer,
+      prepareImage: (_) async => [1],
+    );
+    final page = await session.startPage('/tmp/x.jpg', SummaryLevel.high);
+    await Future.delayed(Duration.zero);
+    await Future.delayed(Duration.zero);
+    expect(page.text, 'Hello world');
+
+    await session.resummarize(page, SummaryLevel.low);
+    expect(page.level, SummaryLevel.low);
+    // Fresh run replaces the old text.
+    expect(page.text, 'Hello world');
+    expect(summarizer.seenLevels,
+        [SummaryLevel.high, SummaryLevel.low]);
+  });
+
+  test('history persists photos + index and restores them', () async {
+    final dir = await Directory.systemTemp.createTemp('session_test_');
+    try {
+      final src = File('${dir.path}/capture.jpg');
+      await src.writeAsBytes([7, 8, 9]);
+      final history = HistoryStore(dir);
+      final session = ReadingSession(
+        summarizer: FakeSummarizer(chunks: const ['saved']),
+        prepareImage: (_) async => [1],
+        history: history,
+      );
+      final page = await session.startPage(src.path, SummaryLevel.max);
+      await Future.delayed(Duration.zero);
+      await Future.delayed(Duration.zero);
+      expect(page.text, 'saved');
+      expect(page.photoPath, startsWith('${dir.path}/photos/'));
+      expect(File('${dir.path}/pages.json').existsSync(), isTrue);
+
+      final fresh = ReadingSession(
+        summarizer: FakeSummarizer(),
+        history: history,
+      );
+      await fresh.restore();
+      expect(fresh.pages.length, 1);
+      expect(fresh.pages.single.text, 'saved');
+      expect(fresh.pages.single.level, SummaryLevel.max);
+      expect(fresh.pages.single.done, isTrue);
+    } finally {
+      await dir.delete(recursive: true);
+    }
   });
 }
 

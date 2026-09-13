@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'camera_screen.dart';
 import 'camera_service.dart';
 import 'diagonal_proxy_client.dart';
+import 'history_store.dart';
 import 'openrouter_client.dart';
 import 'reading_session.dart';
 
@@ -18,8 +19,15 @@ const mockApi = String.fromEnvironment('MOCK_API');
 const diagonalApi = String.fromEnvironment('DIAGONAL_API');
 const proxyToken = String.fromEnvironment('PROXY_TOKEN');
 
-void main() {
-  runApp(const DiagonalApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final history = await HistoryStore.load();
+  final session = ReadingSession(
+    summarizer: buildSummarizer(),
+    history: history,
+  );
+  await session.restore();
+  runApp(DiagonalApp(session: session));
 }
 
 class DiagonalApp extends StatelessWidget {

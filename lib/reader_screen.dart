@@ -121,28 +121,51 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ),
             ),
           ),
-          // Bottom: next page button → back to fullscreen camera.
+          // Bottom: next page front and center; smaller resummarize
+          // menu beside it (works for historical pages too — the kept
+          // photo is resubmitted at the chosen level).
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
             child: SafeArea(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 20),
-                  child: ElevatedButton.icon(
-                    key: const Key('nextPageButton'),
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Next page'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 28, vertical: 14),
-                      textStyle: const TextStyle(fontSize: 17),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 20),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton.icon(
+                      key: const Key('nextPageButton'),
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.camera_alt),
+                      label: const Text('Next page'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 28, vertical: 14),
+                        textStyle: const TextStyle(fontSize: 17),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    PopupMenuButton<SummaryLevel>(
+                      key: const Key('resummarizeButton'),
+                      icon: const Icon(Icons.refresh,
+                          color: Colors.white70),
+                      tooltip: 'Summarize again',
+                      onSelected: (level) => widget.session
+                          .resummarize(_pages[_current], level),
+                      itemBuilder: (_) => [
+                        for (final level in SummaryLevel.values)
+                          PopupMenuItem(
+                            key: Key('resummarize_${level.name}'),
+                            value: level,
+                            child: Text(level.label),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
