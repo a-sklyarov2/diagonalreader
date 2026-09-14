@@ -1,4 +1,4 @@
-package com.example.diagonal
+package com.diagonalreader.app
 
 import io.flutter.embedding.android.FlutterActivity
 
