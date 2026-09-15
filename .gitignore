@@ -1,6 +1,12 @@
 # env
 .env
 
+# Android upload-key signing — loss = support ticket, never commit
+android/key.properties
+key.properties
+*.jks
+*.keystore
+
 # Flutter/Dart
 .dart_tool/
 .build/
