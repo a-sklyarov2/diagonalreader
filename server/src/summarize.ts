@@ -123,7 +123,7 @@ export async function summarize(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${env.OPENROUTER_KEY}`,
       'HTTP-Referer': 'https://diagonal.app',
-      'X-Title': 'Diagonal via Cloudflare',
+      'X-Title': 'Diagonal Reader via Cloudflare',
     },
     body: JSON.stringify({
       model,

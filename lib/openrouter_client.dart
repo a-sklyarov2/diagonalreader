@@ -86,7 +86,7 @@ class OpenRouterClient implements Summarizer {
       request.headers['Authorization'] = 'Bearer $apiKey';
     }
     request.headers['HTTP-Referer'] = 'https://diagonal.app';
-    request.headers['X-Title'] = 'Diagonal MVP';
+    request.headers['X-Title'] = 'Diagonal Reader';
     request.body = jsonEncode({
       'model': model,
       'stream': true,

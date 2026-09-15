@@ -43,7 +43,7 @@ class DiagonalApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Diagonal',
+      title: 'Diagonal Reader',
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         colorScheme: .fromSeed(
           seedColor: Colors.teal,

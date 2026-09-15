@@ -131,10 +131,10 @@ class _CameraScreenState extends State<CameraScreen> {
             child: SafeArea(
               child: Center(
                 child: Text(
-                  'DIAGONAL',
+                  'DIAGONAL READER',
                   style: TextStyle(
                     color: Colors.white,
-                    letterSpacing: 6,
+                    letterSpacing: 4,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
