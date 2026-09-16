@@ -15,4 +15,4 @@ MODEL = "google/gemini-3.5-flash-lite"
 [[d1_databases]]
 binding = "DB"
 database_name = "diagonal"
-database_id = "00000000-0000-0000-0000-000000000000" # TODO: fill in
+database_id = "b13d20f2-5edb-4799-a95f-cf646182f860"
