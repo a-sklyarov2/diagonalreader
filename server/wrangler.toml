@@ -8,3 +8,11 @@ account_id = "3a3c78db80d271226caeb10f8ba124e8"
 
 [vars]
 MODEL = "google/gemini-3.5-flash-lite"
+
+# Page-quota database. database_id comes from `wrangler d1 create
+# diagonal` (run once); migrations/ is applied with
+# `wrangler d1 migrations apply diagonal --local` / `--remote`.
+[[d1_databases]]
+binding = "DB"
+database_name = "diagonal"
+database_id = "00000000-0000-0000-0000-000000000000" # TODO: fill in

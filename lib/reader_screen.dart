@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import 'billing_service.dart';
 import 'reading_session.dart';
 import 'summary_level.dart';
 
@@ -14,10 +15,12 @@ class ReaderScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.initialIndex,
+    this.billing,
   });
 
   final ReadingSession session;
   final int initialIndex;
+  final BillingApi? billing;
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -43,6 +46,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Resummaries and retries cost a page too — gate them the same way
+  /// as fresh captures.
+  Future<void> _gated(Future<void> Function() action) async {
+    final billing = widget.billing;
+    if (billing != null && !await billing.ensureAllowance()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Out of pages — subscribe to keep reading.'),
+          ),
+        );
+      }
+      return;
+    }
+    await action();
   }
 
   void _deleteCurrent() {
@@ -75,6 +95,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               key: Key('readerPage_$index'),
               page: _pages[index],
               session: widget.session,
+              billing: widget.billing,
             ),
           ),
           // Top bar: back to camera + position.
@@ -154,8 +175,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       icon: const Icon(Icons.refresh,
                           color: Colors.white70),
                       tooltip: 'Summarize again',
-                      onSelected: (level) => widget.session
-                          .resummarize(_pages[_current], level),
+                      onSelected: (level) => _gated(() async {
+                        widget.session.resummarize(
+                            _pages[_current], level);
+                      }),
                       itemBuilder: (_) => [
                         for (final level in SummaryLevel.values)
                           PopupMenuItem(
@@ -181,10 +204,12 @@ class _ReaderPage extends StatelessWidget {
     super.key,
     required this.page,
     required this.session,
+    this.billing,
   });
 
   final SummaryPage page;
   final ReadingSession session;
+  final BillingApi? billing;
 
   @override
   Widget build(BuildContext context) {
@@ -254,7 +279,22 @@ class _ReaderPage extends StatelessWidget {
             const SizedBox(height: 16),
             ElevatedButton(
               key: const Key('retryButton'),
-              onPressed: () => session.retry(page),
+              onPressed: () async {
+                final billing = this.billing;
+                if (billing != null &&
+                    !await billing.ensureAllowance()) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                            'Out of pages — subscribe to keep reading.'),
+                      ),
+                    );
+                  }
+                  return;
+                }
+                session.retry(page);
+              },
               child: const Text('Retry'),
             ),
           ],

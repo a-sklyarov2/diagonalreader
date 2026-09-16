@@ -1,6 +1,7 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import 'billing_service.dart';
 import 'camera_service.dart';
 import 'reader_screen.dart';
 import 'reading_session.dart';
@@ -13,16 +14,21 @@ class CameraScreen extends StatefulWidget {
     super.key,
     required this.session,
     this.cameras,
+    this.billing,
   });
 
   final ReadingSession session;
   final CameraService? cameras;
+  final BillingApi? billing;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
 class _CameraScreenState extends State<CameraScreen> {
+  static final BillingApi _allowAll = FakeBilling();
+  BillingApi get _billing => widget.billing ?? _allowAll;
+
   late final CameraService _cameras;
   bool _ready = false;
   String? _error;
@@ -49,6 +55,16 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_capturing) return;
     setState(() => _capturing = true);
     try {
+      if (!await _billing.ensureAllowance()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Out of pages — subscribe to keep reading.'),
+            ),
+          );
+        }
+        return;
+      }
       final path = await _cameras.takePicture();
       if (path == null) throw StateError('No picture returned');
       final page = await widget.session.startPage(path, _level);
@@ -59,6 +75,7 @@ class _CameraScreenState extends State<CameraScreen> {
           builder: (_) => ReaderScreen(
             session: widget.session,
             initialIndex: index,
+            billing: _billing,
           ),
         ),
       );
@@ -137,6 +154,46 @@ class _CameraScreenState extends State<CameraScreen> {
                     letterSpacing: 4,
                     fontWeight: FontWeight.w600,
                   ),
+                ),
+              ),
+            ),
+          ),
+          // Pages-left pill (top right). Subscribers see their
+          // balance too; hidden until the first quota fetch lands.
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8, right: 12),
+                child: ListenableBuilder(
+                  listenable: _billing,
+                  builder: (context, _) {
+                    final quota = _billing.quota;
+                    if (!_billing.ready || quota == null) {
+                      return const SizedBox.shrink();
+                    }
+                    final label = _billing.isSubscriber
+                        ? '★ ${quota.totalLeft}'
+                        : '${quota.totalLeft} pages';
+                    return Container(
+                      key: const Key('quotaPill'),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        label,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),

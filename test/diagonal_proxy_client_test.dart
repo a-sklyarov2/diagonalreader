@@ -44,6 +44,49 @@ void main() {
     expect(body, contains('filename="page.jpg"'));
   });
 
+  test('fetchQuota parses allowance', () async {
+    String? path;
+    String? auth;
+    String? user;
+    final mock = MockClient((request) async {
+      path = request.url.path;
+      auth = request.headers['Authorization'];
+      user = request.url.queryParameters['user'];
+      return http.Response(
+        '{"freeUsed":9,"freeTotal":10,"paidBalance":500,"pro":true}',
+        200,
+      );
+    });
+    final client = DiagonalProxyClient(
+      baseUrl: 'https://api.test',
+      proxyToken: 'secret',
+      httpClient: mock,
+    );
+    final quota = await client.fetchQuota('android:abc');
+    expect(path, '/quota');
+    expect(auth, 'Bearer secret');
+    expect(user, 'android:abc');
+    expect(quota.freeUsed, 9);
+    expect(quota.freeTotal, 10);
+    expect(quota.freeLeft, 1);
+    expect(quota.paidBalance, 500);
+    expect(quota.totalLeft, 501);
+    expect(quota.pro, isTrue);
+    expect(quota.canSummarize, isTrue);
+  });
+
+  test('fetchQuota throws on non-200', () async {
+    final mock = MockClient(
+      (_) async => http.Response('{"error":"unauthorized"}', 401),
+    );
+    final client = DiagonalProxyClient(
+      baseUrl: 'https://api.test',
+      proxyToken: 'bad',
+      httpClient: mock,
+    );
+    expect(() => client.fetchQuota('u'), throwsA(isA<Exception>()));
+  });
+
   test('throws on non-200', () async {
     final mock = MockClient(
       (_) async => http.Response('{"error":"unauthorized"}', 401),

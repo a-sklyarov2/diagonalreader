@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'billing_service.dart';
 import 'camera_screen.dart';
 import 'camera_service.dart';
+import 'device_identity.dart';
 import 'diagonal_proxy_client.dart';
 import 'history_store.dart';
 import 'openrouter_client.dart';
@@ -19,15 +21,34 @@ const mockApi = String.fromEnvironment('MOCK_API');
 const diagonalApi = String.fromEnvironment('DIAGONAL_API');
 const proxyToken = String.fromEnvironment('PROXY_TOKEN');
 
+/// RevenueCat public SDK key (`test_…` for the Test Store, `goog_…`
+/// for Play). Empty → billing runs in quota-only mode (no paywall).
+const revenueCatKey = String.fromEnvironment('REVENUECAT_KEY');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final history = await HistoryStore.load();
+  final userId = await DeviceIdentity().userId();
+  final summarizer = buildSummarizer();
+  final BillingApi billing;
+  if (summarizer is DiagonalProxyClient) {
+    final rc = RevenueCatBilling(
+      quotaClient: summarizer,
+      userId: userId,
+      apiKey: revenueCatKey,
+    );
+    await rc.init();
+    billing = rc;
+  } else {
+    billing = FakeBilling();
+  }
   final session = ReadingSession(
-    summarizer: buildSummarizer(),
+    summarizer: summarizer,
     history: history,
+    userId: userId,
   );
   await session.restore();
-  runApp(DiagonalApp(session: session));
+  runApp(DiagonalApp(session: session, billing: billing));
 }
 
 class DiagonalApp extends StatelessWidget {
@@ -35,10 +56,12 @@ class DiagonalApp extends StatelessWidget {
     super.key,
     this.session,
     this.cameras,
+    this.billing,
   });
 
   final ReadingSession? session;
   final CameraService? cameras;
+  final BillingApi? billing;
 
   @override
   Widget build(BuildContext context) {
@@ -54,6 +77,7 @@ class DiagonalApp extends StatelessWidget {
         session: session ??
             ReadingSession(summarizer: buildSummarizer()),
         cameras: cameras,
+        billing: billing ?? FakeBilling(),
       ),
     );
   }

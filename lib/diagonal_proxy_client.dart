@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 import 'openrouter_client.dart';
+import 'quota.dart';
 import 'summary_level.dart';
 
 /// Summarizer that talks to our Cloudflare Worker instead of OpenRouter
@@ -23,16 +24,40 @@ class DiagonalProxyClient implements Summarizer {
   final String _token;
   final http.Client _http;
 
+  /// Current page allowance for [userId] (free + purchased).
+  Future<QuotaStatus> fetchQuota(String userId) async {
+    final uri = Uri.parse(
+      '$_base/quota?user=${Uri.encodeComponent(userId)}',
+    );
+    final response = await _http.get(
+      uri,
+      headers: {'Authorization': 'Bearer $_token'},
+    );
+    if (response.statusCode != 200) {
+      final excerpt = response.body.length > 300
+          ? '${response.body.substring(0, 300)}…'
+          : response.body;
+      throw OpenRouterException(response.statusCode, excerpt);
+    }
+    return QuotaStatus.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+  }
+
   @override
   Stream<String> summarize({
     required List<int> jpeg,
     required SummaryLevel level,
+    String? userId,
   }) async* {
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$_base/summarize'),
     );
     request.headers['Authorization'] = 'Bearer $_token';
+    if (userId != null && userId.isNotEmpty) {
+      request.headers['X-User-Id'] = userId;
+    }
     request.fields['level'] = level.name;
     request.files.add(
       http.MultipartFile.fromBytes(

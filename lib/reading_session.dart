@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'diagonal_proxy_client.dart';
 import 'history_store.dart';
 import 'image_prep.dart';
 import 'openrouter_client.dart';
@@ -71,13 +72,18 @@ class ReadingSession extends ChangeNotifier {
     required Summarizer summarizer,
     ImagePreparer prepareImage = preparePageImage,
     HistoryStore? history,
+    String? userId,
   })  : _summarizer = summarizer, // ignore: prefer_initializing_formals
         _prepareImage = prepareImage, // ignore: prefer_initializing_formals
-        _history = history; // ignore: prefer_initializing_formals
+        _history = history, // ignore: prefer_initializing_formals
+        _userId = userId; // ignore: prefer_initializing_formals
 
   final Summarizer _summarizer;
   final ImagePreparer _prepareImage;
   final HistoryStore? _history;
+
+  /// Stable device user id, forwarded to the proxy for quota metering.
+  final String? _userId;
 
   final List<SummaryPage> pages = [];
 
@@ -141,10 +147,12 @@ class ReadingSession extends ChangeNotifier {
   Future<void> _run(SummaryPage page) async {
     try {
       final jpeg = await _prepareImage(page.photoPath);
-      await for (final delta in _summarizer.summarize(
-        jpeg: jpeg,
-        level: page.level,
-      )) {
+      final summarizer = _summarizer;
+      final stream = summarizer is DiagonalProxyClient
+          ? summarizer.summarize(
+              jpeg: jpeg, level: page.level, userId: _userId)
+          : summarizer.summarize(jpeg: jpeg, level: page.level);
+      await for (final delta in stream) {
         page.append(delta);
       }
       if (!page.hasContent && page.error == null) {

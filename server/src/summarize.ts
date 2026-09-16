@@ -4,11 +4,23 @@
  * break the runtime — so everything else lives here.
  */
 
+import {
+  consumePage,
+  freeTotal,
+  refundPage,
+  type D1Db,
+} from './quota';
+
 export interface Env {
   OPENROUTER_KEY: string;
   PROXY_TOKEN: string;
   MODEL?: string;
   OPENROUTER_BASE?: string;
+  FREE_PAGES?: string;
+  RC_WEBHOOK_SECRET?: string;
+  /** D1 quota database. Unbound (unit tests, bare dev) → metering
+   *  is skipped and every request is allowed. */
+  DB?: D1Db;
 }
 
 export const DEFAULT_MODEL = 'google/gemini-3.5-flash-lite';
@@ -112,6 +124,29 @@ export async function summarize(
     return Response.json({ error: 'image too large' }, { status: 413 });
   }
 
+  // Spend one page before calling the paid upstream. Free allowance
+  // first, then purchased balance; exhausted → 402 so the app can
+  // show the paywall. Skipped when no D1 is bound (tests/dev).
+  const db = env.DB;
+  let spent: 'free' | 'paid' | null = null;
+  let quotaUser = '';
+  if (db) {
+    quotaUser = (request.headers.get('X-User-Id') ?? '').trim();
+    if (!quotaUser) {
+      return Response.json(
+        { error: 'missing X-User-Id' },
+        { status: 400 },
+      );
+    }
+    spent = await consumePage(db, quotaUser, freeTotal(env));
+    if (spent === null) {
+      return Response.json(
+        { error: 'quota_exhausted' },
+        { status: 402 },
+      );
+    }
+  }
+
   const bytes = new Uint8Array(await image.arrayBuffer());
   const cfg = LEVELS[levelRaw];
   const model = env.MODEL || DEFAULT_MODEL;
@@ -157,6 +192,11 @@ export async function summarize(
     const text = await upstream.text().catch(() => '');
     const excerpt =
       text.length > 300 ? `${text.slice(0, 300)}…` : text;
+    // Upstream failed before streaming a single token — give the
+    // page back so retries don't double-charge.
+    if (db && spent !== null) {
+      await refundPage(db, quotaUser, spent).catch(() => {});
+    }
     return Response.json(
       { error: `openrouter ${upstream.status}: ${excerpt}` },
       { status: 502 },
