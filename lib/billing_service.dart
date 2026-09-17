@@ -35,6 +35,10 @@ abstract class BillingApi extends ChangeNotifier {
 
   Future<void> refreshQuota();
   Future<bool> ensureAllowance();
+
+  /// Open subscription management (cancel / change tier / restore).
+  /// No-op where purchases are unavailable.
+  Future<void> manageSubscription();
 }
 
 /// RevenueCat + Worker-quota implementation.
@@ -197,6 +201,24 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     return _deny('purchase done, credit not yet received — retry soon');
   }
 
+  @override
+  Future<void> manageSubscription() async {
+    if (!_rcEnabled ||
+        !(Platform.isAndroid || Platform.isIOS)) {
+      return;
+    }
+    try {
+      await RevenueCatUI.presentCustomerCenter();
+    } catch (e) {
+      _lastError = 'could not open subscription settings: $e';
+      notifyListeners();
+      return;
+    }
+    // A tier change credits via webhook — refresh everything on return.
+    await _readEntitlement();
+    await refreshQuota();
+  }
+
   bool _deny(String? reason) {
     _lastError = reason;
     notifyListeners();
@@ -241,6 +263,9 @@ class FakeBilling extends BillingApi {
 
   @override
   Future<void> refreshQuota() async {}
+
+  @override
+  Future<void> manageSubscription() async {}
 
   @override
   Future<bool> ensureAllowance() async {

@@ -182,20 +182,50 @@ class _CameraScreenState extends State<CameraScreen> {
                     final label = _billing.isSubscriber
                         ? '★ ${quota.totalLeft}'
                         : '${quota.totalLeft} pages';
-                    return Container(
+                    return InkWell(
                       key: const Key('quotaPill'),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        label,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () async {
+                        final billing = _billing;
+                        final before = billing.lastError;
+                        await billing.manageSubscription();
+                        final error = billing.lastError;
+                        if (context.mounted &&
+                            error != null &&
+                            error != before) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error)),
+                          );
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              label,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (_billing.isSubscriber)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4),
+                                child: Icon(
+                                  Icons.settings,
+                                  size: 12,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     );
