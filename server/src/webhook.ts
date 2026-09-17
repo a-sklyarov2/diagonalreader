@@ -18,11 +18,17 @@ export interface Env {
   RC_WEBHOOK_SECRET: string;
 }
 
-/** Tier product id → pages credited per billing period. */
+/** Tier product id → pages credited per billing period.
+ *  Both casings: Test Store products are mixed-case
+ *  (`pagesMid_monthly`) while Play product IDs must be lowercase
+ *  (`pagesmid_monthly`) — both credit identically. */
 export const TIER_PAGES: Record<string, number> = {
   pagesLow_monthly: 100,
+  pageslow_monthly: 100,
   pagesMid_monthly: 500,
+  pagesmid_monthly: 500,
   pagesMax_monthly: 3000,
+  pagesmax_monthly: 3000,
 };
 
 /** Event types that grant a fresh period of pages: initial buys,

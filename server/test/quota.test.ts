@@ -317,6 +317,19 @@ describe('POST /rc-webhook', () => {
     );
     expect(unknown.status).toBe(400);
 
+    // Play's lowercase product IDs credit identically to the
+    // Test Store mixed-case ones.
+    const playCased = await worker.fetch(
+      rcEvent('INITIAL_PURCHASE', 'evt-y', 'u2', 'pagesmid_monthly'),
+      env,
+    );
+    expect(playCased.status).toBe(200);
+    expect(await playCased.json()).toEqual({
+      credited: 500,
+      user: 'u2',
+      product: 'pagesmid_monthly',
+    });
+
     const empty = await worker.fetch(
       new Request('https://api.test/rc-webhook', {
         method: 'POST',
