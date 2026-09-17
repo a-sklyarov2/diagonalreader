@@ -48,9 +48,13 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     required String userId,
     required String apiKey,
     Future<PaywallResult> Function(Offering? offering)? paywallPresenter,
+    Future<Offering?> Function()? offeringsLoader,
+    bool forceStoreEnabled = false,
   })  : _quotaClient = quotaClient, // ignore: prefer_initializing_formals
         _userId = userId, // ignore: prefer_initializing_formals
         _apiKey = apiKey, // ignore: prefer_initializing_formals
+        _forceStoreEnabled = forceStoreEnabled,
+        _offeringsLoader = offeringsLoader ?? _loadPagesOffering,
         _paywallPresenter = paywallPresenter ??
             ((offering) => RevenueCatUI.presentPaywall(
                   offering: offering,
@@ -60,6 +64,8 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   final DiagonalProxyClient _quotaClient;
   final String _userId;
   final String _apiKey;
+  final bool _forceStoreEnabled;
+  final Future<Offering?> Function() _offeringsLoader;
   final Future<PaywallResult> Function(Offering? offering)
       _paywallPresenter;
 
@@ -84,7 +90,10 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
 
   /// Configure the SDK (no-op without key/store) and fetch quota once.
   Future<void> init() async {
-    if (_apiKey.isNotEmpty &&
+    if (_forceStoreEnabled) {
+      // Tests: store SDK skipped, paywall is injected.
+      _rcEnabled = true;
+    } else if (_apiKey.isNotEmpty &&
         (Platform.isAndroid || Platform.isIOS)) {
       try {
         await Purchases.configure(
@@ -148,9 +157,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     }
     Offering? offering;
     try {
-      final offerings = await Purchases.getOfferings();
-      offering =
-          offerings.all[pagesOfferingId] ?? offerings.current;
+      offering = await _offeringsLoader();
     } catch (e) {
       return _deny('could not load offers: $e');
     }
@@ -175,9 +182,10 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
       );
     }
     // The purchase webhook credits the server balance asynchronously —
-    // poll briefly before deciding the paywall didn't help.
+    // Test Store deliveries can take a while, so poll up to ~30s
+    // before deciding the paywall didn't help.
     await _readEntitlement();
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < 15; i++) {
       await refreshQuota();
       if (_quota != null && _quota!.canSummarize) {
         _lastError = null;
@@ -193,6 +201,11 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     _lastError = reason;
     notifyListeners();
     return false;
+  }
+
+  static Future<Offering?> _loadPagesOffering() async {
+    final offerings = await Purchases.getOfferings();
+    return offerings.all[pagesOfferingId] ?? offerings.current;
   }
 }
 

@@ -4,6 +4,7 @@ import 'package:diagonal/quota.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 
 DiagonalProxyClient quotaClient(Map<String, dynamic> quotaJson) {
   final mock = MockClient(
@@ -62,6 +63,22 @@ void main() {
     await billing.init();
     expect(await billing.ensureAllowance(), isFalse);
     expect(paywallShown, isFalse);
+  });
+
+  test('paywall denial names the missing offering', () async {
+    final billing = RevenueCatBilling(
+      quotaClient: quotaClient(emptyQuota),
+      userId: 'android:test',
+      apiKey: 'test-key',
+      forceStoreEnabled: true,
+      offeringsLoader: () async => null,
+      paywallPresenter: (_) async {
+        throw StateError('must not present without an offering');
+      },
+    );
+    await billing.init();
+    expect(await billing.ensureAllowance(), isFalse);
+    expect(billing.lastError, contains('no "pages" offering'));
   });
 
   test('FakeBilling gates on quota by default', () async {

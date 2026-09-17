@@ -53,21 +53,24 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Future<void> _capture() async {
     if (_capturing) return;
+    // Allowance (and the paywall) first, outside the capture spinner:
+    // buying pages can take a while and shouldn't look like a stuck
+    // photo capture.
+    if (!await _billing.ensureAllowance()) {
+      if (mounted) {
+        final reason = _billing.lastError;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(reason == null
+                ? 'Out of pages — subscribe to keep reading.'
+                : 'Cannot subscribe yet: $reason'),
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _capturing = true);
     try {
-      if (!await _billing.ensureAllowance()) {
-        if (mounted) {
-          final reason = _billing.lastError;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(reason == null
-                  ? 'Out of pages — subscribe to keep reading.'
-                  : 'Cannot subscribe yet: $reason'),
-            ),
-          );
-        }
-        return;
-      }
       final path = await _cameras.takePicture();
       if (path == null) throw StateError('No picture returned');
       final page = await widget.session.startPage(path, _level);
