@@ -271,6 +271,18 @@ describe('POST /rc-webhook', () => {
     );
     expect(renewal.status).toBe(200);
     expect((await getQuota(db, 'u1', 10)).paidBalance).toBe(600);
+
+    const upgrade = await worker.fetch(
+      rcEvent('PRODUCT_CHANGE', 'evt-3', 'u1', 'pagesMax_monthly'),
+      env,
+    );
+    expect(upgrade.status).toBe(200);
+    expect(await upgrade.json()).toEqual({
+      credited: 3000,
+      user: 'u1',
+      product: 'pagesMax_monthly',
+    });
+    expect((await getQuota(db, 'u1', 10)).paidBalance).toBe(3600);
   });
 
   it('ignores non-credit events without touching balance', async () => {

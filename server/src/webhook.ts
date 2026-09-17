@@ -25,12 +25,15 @@ export const TIER_PAGES: Record<string, number> = {
   pagesMax_monthly: 3000,
 };
 
-/** Event types that grant a fresh period of pages. */
+/** Event types that grant a fresh period of pages: initial buys,
+ *  every auto-renewal, resubscribes after a pause, and tier changes
+ *  (Low↔Mid↔Max mid-period credit the new tier immediately). */
 const CREDIT_EVENTS = new Set([
   'INITIAL_PURCHASE',
   'RENEWAL',
   'UNCANCELLATION',
   'NON_RENEWING_PURCHASE',
+  'PRODUCT_CHANGE',
 ]);
 
 interface RcEvent {
