@@ -28,6 +28,11 @@ abstract class BillingApi extends ChangeNotifier {
   /// True when the RevenueCat `pro_pages` entitlement is active.
   bool get isSubscriber;
 
+  /// Human-readable reason the last paywall attempt failed (null when
+  /// the last attempt succeeded or none was made). Shown in the UI so
+  /// paywall misconfiguration is diagnosable on-device.
+  String? get lastError;
+
   Future<void> refreshQuota();
   Future<bool> ensureAllowance();
 }
@@ -63,9 +68,13 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   bool _subscriber = false;
   QuotaStatus? _quota;
   bool _refreshing = false;
+  String? _lastError;
 
   @override
   QuotaStatus? get quota => _quota;
+
+  @override
+  String? get lastError => _lastError;
 
   @override
   bool get ready => _ready;
@@ -128,34 +137,61 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   @override
   Future<bool> ensureAllowance() async {
     await refreshQuota();
-    if (_quota != null && _quota!.canSummarize) return true;
-    if (!_rcEnabled) return false;
+    if (_quota != null && _quota!.canSummarize) {
+      _lastError = null;
+      return true;
+    }
+    if (!_rcEnabled) {
+      _lastError = 'purchases unavailable on this build';
+      notifyListeners();
+      return false;
+    }
     Offering? offering;
     try {
+      final offerings = await Purchases.getOfferings();
       offering =
-          (await Purchases.getOfferings()).all[pagesOfferingId];
+          offerings.all[pagesOfferingId] ?? offerings.current;
     } catch (e) {
-      debugPrint('Offerings fetch failed: $e');
+      return _deny('could not load offers: $e');
+    }
+    if (offering == null) {
+      return _deny('no "$pagesOfferingId" offering in RevenueCat');
+    }
+    if (offering.availablePackages.isEmpty) {
+      return _deny('offering "$pagesOfferingId" has no packages');
     }
     PaywallResult result;
     try {
       result = await _paywallPresenter(offering);
     } catch (e) {
-      debugPrint('Paywall failed: $e');
-      return false;
+      return _deny('paywall failed: $e');
     }
     if (result != PaywallResult.purchased &&
         result != PaywallResult.restored) {
-      return false;
+      return _deny(
+        result == PaywallResult.error
+            ? 'store error during purchase'
+            : null, // cancelled/dismissed: generic out-of-pages note
+      );
     }
     // The purchase webhook credits the server balance asynchronously —
     // poll briefly before deciding the paywall didn't help.
     await _readEntitlement();
     for (var i = 0; i < 6; i++) {
       await refreshQuota();
-      if (_quota != null && _quota!.canSummarize) return true;
+      if (_quota != null && _quota!.canSummarize) {
+        _lastError = null;
+        notifyListeners();
+        return true;
+      }
       await Future<void>.delayed(const Duration(seconds: 2));
     }
+    return _deny('purchase done, credit not yet received — retry soon');
+  }
+
+  bool _deny(String? reason) {
+    _lastError = reason;
+    notifyListeners();
     return false;
   }
 }
@@ -175,6 +211,9 @@ class FakeBilling extends BillingApi {
 
   @override
   bool isSubscriber;
+
+  @override
+  String? get lastError => null;
 
   @override
   QuotaStatus? get quota => _quota;

@@ -57,9 +57,12 @@ class _CameraScreenState extends State<CameraScreen> {
     try {
       if (!await _billing.ensureAllowance()) {
         if (mounted) {
+          final reason = _billing.lastError;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Out of pages — subscribe to keep reading.'),
+            SnackBar(
+              content: Text(reason == null
+                  ? 'Out of pages — subscribe to keep reading.'
+                  : 'Cannot subscribe yet: $reason'),
             ),
           );
         }

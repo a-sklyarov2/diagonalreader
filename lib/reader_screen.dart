@@ -54,9 +54,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final billing = widget.billing;
     if (billing != null && !await billing.ensureAllowance()) {
       if (mounted) {
+        final reason = billing.lastError;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Out of pages — subscribe to keep reading.'),
+          SnackBar(
+            content: Text(reason == null
+                ? 'Out of pages — subscribe to keep reading.'
+                : 'Cannot subscribe yet: $reason'),
           ),
         );
       }
@@ -284,10 +287,12 @@ class _ReaderPage extends StatelessWidget {
                 if (billing != null &&
                     !await billing.ensureAllowance()) {
                   if (context.mounted) {
+                    final reason = billing.lastError;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                            'Out of pages — subscribe to keep reading.'),
+                      SnackBar(
+                        content: Text(reason == null
+                            ? 'Out of pages — subscribe to keep reading.'
+                            : 'Cannot subscribe yet: $reason'),
                       ),
                     );
                   }
