@@ -53,7 +53,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   })  : _quotaClient = quotaClient, // ignore: prefer_initializing_formals
         _userId = userId, // ignore: prefer_initializing_formals
         _apiKey = apiKey, // ignore: prefer_initializing_formals
-        _forceStoreEnabled = forceStoreEnabled,
+        _forceStoreEnabled = forceStoreEnabled, // ignore: prefer_initializing_formals
         _offeringsLoader = offeringsLoader ?? _loadPagesOffering,
         _paywallPresenter = paywallPresenter ??
             ((offering) => RevenueCatUI.presentPaywall(
