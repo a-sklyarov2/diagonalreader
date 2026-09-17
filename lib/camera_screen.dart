@@ -188,7 +188,13 @@ class _CameraScreenState extends State<CameraScreen> {
                       onTap: () async {
                         final billing = _billing;
                         final before = billing.lastError;
-                        await billing.manageSubscription();
+                        // Subscribers manage (cancel/change); everyone
+                        // else (re)subscribes straight from the pill.
+                        if (billing.isSubscriber) {
+                          await billing.manageSubscription();
+                        } else {
+                          await billing.showPaywall();
+                        }
                         final error = billing.lastError;
                         if (context.mounted &&
                             error != null &&

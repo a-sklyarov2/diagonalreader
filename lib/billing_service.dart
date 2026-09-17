@@ -39,6 +39,11 @@ abstract class BillingApi extends ChangeNotifier {
   /// Open subscription management (cancel / change tier / restore).
   /// No-op where purchases are unavailable.
   Future<void> manageSubscription();
+
+  /// Present the subscription paywall unconditionally (re-subscribe
+  /// after expiry, or top up while pages remain). Afterwards the
+  /// server balance is refreshed.
+  Future<void> showPaywall();
 }
 
 /// RevenueCat + Worker-quota implementation.
@@ -159,35 +164,61 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
       notifyListeners();
       return false;
     }
+    if (!await _buyPages()) return false;
+    return _awaitCredit();
+  }
+
+  @override
+  Future<void> showPaywall() async {
+    if (!_rcEnabled) {
+      _deny('purchases unavailable on this build');
+      return;
+    }
+    if (!await _buyPages()) return;
+    await _awaitCredit();
+  }
+
+  /// Load the pages offering and present it. Returns true on
+  /// purchase/restore; otherwise records the reason in [_lastError].
+  Future<bool> _buyPages() async {
     Offering? offering;
     try {
       offering = await _offeringsLoader();
     } catch (e) {
-      return _deny('could not load offers: $e');
+      _deny('could not load offers: $e');
+      return false;
     }
     if (offering == null) {
-      return _deny('no "$pagesOfferingId" offering in RevenueCat');
+      _deny('no "$pagesOfferingId" offering in RevenueCat');
+      return false;
     }
     if (offering.availablePackages.isEmpty) {
-      return _deny('offering "$pagesOfferingId" has no packages');
+      _deny('offering "$pagesOfferingId" has no packages');
+      return false;
     }
     PaywallResult result;
     try {
       result = await _paywallPresenter(offering);
     } catch (e) {
-      return _deny('paywall failed: $e');
+      _deny('paywall failed: $e');
+      return false;
     }
     if (result != PaywallResult.purchased &&
         result != PaywallResult.restored) {
-      return _deny(
+      _deny(
         result == PaywallResult.error
             ? 'store error during purchase'
-            : null, // cancelled/dismissed: generic out-of-pages note
+            : null, // cancelled/dismissed: caller shows its own note
       );
+      return false;
     }
-    // The purchase webhook credits the server balance asynchronously —
-    // Test Store deliveries can take a while, so poll up to ~30s
-    // before deciding the paywall didn't help.
+    return true;
+  }
+
+  /// After a successful purchase/restore, the credit webhook lands
+  /// asynchronously — poll up to ~30s. Returns true once the server
+  /// balance covers another page.
+  Future<bool> _awaitCredit() async {
     await _readEntitlement();
     for (var i = 0; i < 15; i++) {
       await refreshQuota();
@@ -266,6 +297,9 @@ class FakeBilling extends BillingApi {
 
   @override
   Future<void> manageSubscription() async {}
+
+  @override
+  Future<void> showPaywall() async {}
 
   @override
   Future<bool> ensureAllowance() async {
