@@ -14,6 +14,53 @@ const proEntitlementId = 'pro_pages';
 /// RevenueCat offering carrying the Low/Mid/Max packages.
 const pagesOfferingId = 'pages';
 
+/// Subscription tier. Rank orders upgrade (higher) vs downgrade.
+enum PlanTier { low, mid, max }
+
+extension PlanTierInfo on PlanTier {
+  int get rank => index;
+  String get name => toString().split('.').last;
+  String get title => '${name[0].toUpperCase()}${name.substring(1)}';
+  int get pages => switch (this) {
+        PlanTier.low => 100,
+        PlanTier.mid => 500,
+        PlanTier.max => 3000,
+      };
+}
+
+/// RevenueCat product id (every store variant) → tier.
+PlanTier? tierOfRcProduct(String productId) {
+  switch (productId) {
+    case 'pagesLow_monthly':
+    case 'pageslow_monthly':
+    case 'pages_monthly:monthly-low':
+      return PlanTier.low;
+    case 'pagesMid_monthly':
+    case 'pagesmid_monthly':
+    case 'pages_monthly:monthly-mid':
+      return PlanTier.mid;
+    case 'pagesMax_monthly':
+    case 'pagesmax_monthly':
+    case 'pages_monthly:monthly-max':
+      return PlanTier.max;
+    default:
+      return null;
+  }
+}
+
+/// One purchasable tier for the plan picker UI.
+class PlanOption {
+  const PlanOption({
+    required this.tier,
+    required this.priceString,
+    required this.isCurrent,
+  });
+
+  final PlanTier tier;
+  final String priceString;
+  final bool isCurrent;
+}
+
 /// What the UI needs: page allowance + a gate shown before spending one.
 ///
 /// [ensureAllowance] returns true when the user may summarize now.
@@ -44,6 +91,16 @@ abstract class BillingApi extends ChangeNotifier {
   /// after expiry, or top up while pages remain). Afterwards the
   /// server balance is refreshed.
   Future<void> showPaywall();
+
+  /// Active subscription tier, null when not subscribed.
+  PlanTier? get currentTier;
+
+  /// Tiers available for purchase/change, with store prices.
+  Future<List<PlanOption>> loadPlans();
+
+  /// Switch to [tier]: upgrades take effect immediately (prorated),
+  /// downgrades at the next renewal. Records failures in [lastError].
+  Future<void> changePlan(PlanTier tier);
 }
 
 /// RevenueCat + Worker-quota implementation.
@@ -58,12 +115,14 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     required String apiKey,
     Future<PaywallResult> Function(Offering? offering)? paywallPresenter,
     Future<Offering?> Function()? offeringsLoader,
+    Future<void> Function(Package, StoreProductChangeInfo?)? purchaseFn,
     bool forceStoreEnabled = false,
   })  : _quotaClient = quotaClient, // ignore: prefer_initializing_formals
         _userId = userId, // ignore: prefer_initializing_formals
         _apiKey = apiKey, // ignore: prefer_initializing_formals
         _forceStoreEnabled = forceStoreEnabled, // ignore: prefer_initializing_formals
         _offeringsLoader = offeringsLoader ?? _loadPagesOffering,
+        _purchaseFn = purchaseFn ?? _buyWithStore,
         _paywallPresenter = paywallPresenter ??
             ((offering) => RevenueCatUI.presentPaywall(
                   offering: offering,
@@ -75,12 +134,15 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   final String _apiKey;
   final bool _forceStoreEnabled;
   final Future<Offering?> Function() _offeringsLoader;
+  final Future<void> Function(Package, StoreProductChangeInfo?)
+      _purchaseFn;
   final Future<PaywallResult> Function(Offering? offering)
       _paywallPresenter;
 
   bool _rcEnabled = false;
   bool _ready = false;
   bool _subscriber = false;
+  String? _currentProductId;
   QuotaStatus? _quota;
   bool _refreshing = false;
   String? _lastError;
@@ -96,6 +158,11 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
 
   @override
   bool get isSubscriber => _subscriber;
+
+  @override
+  PlanTier? get currentTier => _subscriber && _currentProductId != null
+      ? tierOfRcProduct(_currentProductId!)
+      : null;
 
   /// Configure the SDK (no-op without key/store) and fetch quota once.
   Future<void> init() async {
@@ -129,10 +196,12 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   }
 
   void _onCustomerInfo(CustomerInfo info) {
-    final active =
-        info.entitlements.all[proEntitlementId]?.isActive ?? false;
-    if (active != _subscriber) {
+    final entitlement = info.entitlements.all[proEntitlementId];
+    final active = entitlement?.isActive ?? false;
+    final productId = active ? entitlement?.productIdentifier : null;
+    if (active != _subscriber || productId != _currentProductId) {
       _subscriber = active;
+      _currentProductId = productId;
       notifyListeners();
     }
   }
@@ -233,6 +302,111 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   }
 
   @override
+  Future<List<PlanOption>> loadPlans() async {
+    final offering = await _offeringsLoader();
+    if (offering == null) {
+      _deny('no "$pagesOfferingId" offering in RevenueCat');
+      return const [];
+    }
+    final current = currentTier;
+    final plans = <PlanOption>[];
+    for (final package in offering.availablePackages) {
+      final tier = tierOfRcProduct(package.storeProduct.identifier);
+      if (tier == null) continue;
+      plans.add(PlanOption(
+        tier: tier,
+        priceString: package.storeProduct.priceString,
+        isCurrent: tier == current,
+      ));
+    }
+    plans.sort((a, b) => a.tier.rank.compareTo(b.tier.rank));
+    if (plans.isEmpty) {
+      _deny('offering "$pagesOfferingId" has no known packages');
+    }
+    return plans;
+  }
+
+  @override
+  Future<void> changePlan(PlanTier tier) async {
+    if (!_rcEnabled) {
+      _deny('purchases unavailable on this build');
+      return;
+    }
+    final from = currentTier;
+    final oldProduct = _currentProductId;
+    if (from == null || oldProduct == null) {
+      _deny('no active subscription — subscribe from the paywall');
+      return;
+    }
+    if (tier == from) {
+      _deny('already on ${tier.title}');
+      return;
+    }
+    final offering = await _offeringsLoader();
+    Package? package;
+    if (offering != null) {
+      for (final p in offering.availablePackages) {
+        if (tierOfRcProduct(p.storeProduct.identifier) == tier) {
+          package = p;
+          break;
+        }
+      }
+    }
+    if (package == null) {
+      _deny('${tier.title} is not offered right now');
+      return;
+    }
+    // Upgrades apply immediately (prorated); downgrades wait for the
+    // next renewal. On Android the replacement info keeps this a plan
+    // change on one subscription instead of a second subscription.
+    final mode = replacementModeFor(from, tier);
+    try {
+      await _purchaseFn(
+        package,
+        Platform.isAndroid
+            ? StoreProductChangeInfo(oldProduct,
+                replacementMode: mode)
+            : null,
+      );
+    } catch (e) {
+      _deny(_isCancelled(e) ? null : 'plan change failed: $e');
+      return;
+    }
+    await _awaitCredit();
+  }
+
+  /// Upgrades prorate immediately; downgrades (and laterals) wait for
+  /// the next renewal.
+  @visibleForTesting
+  static StoreReplacementMode replacementModeFor(
+    PlanTier from,
+    PlanTier to,
+  ) =>
+      to.rank > from.rank
+          ? StoreReplacementMode.withTimeProration
+          : StoreReplacementMode.deferred;
+
+  static bool _isCancelled(Object e) =>
+      e.toString().contains('purchaseCancelled');
+  /// Test-only: seed entitlement state (the real source is the
+  /// RevenueCat CustomerInfo listener, unreachable off-device).
+  @visibleForTesting
+  void seedEntitlement({required bool active, String? productId}) {
+    _subscriber = active;
+    _currentProductId = active ? productId : null;
+    notifyListeners();
+  }
+
+  static Future<void> _buyWithStore(
+    Package package,
+    StoreProductChangeInfo? info,
+  ) async {
+    await Purchases.purchase(
+      PurchaseParams.package(package, productChangeInfo: info),
+    );
+  }
+
+  @override
   Future<void> manageSubscription() async {
     if (!_rcEnabled ||
         !(Platform.isAndroid || Platform.isIOS)) {
@@ -268,7 +442,10 @@ class FakeBilling extends BillingApi {
     QuotaStatus? quota,
     this.ensureResult,
     this.isSubscriber = false,
+    this.stubTier,
   }) : _quota = quota; // ignore: prefer_initializing_formals
+
+  PlanTier? stubTier;
 
   QuotaStatus? _quota;
 
@@ -300,6 +477,29 @@ class FakeBilling extends BillingApi {
 
   @override
   Future<void> showPaywall() async {}
+
+  @override
+  PlanTier? get currentTier => isSubscriber ? stubTier : null;
+
+  @override
+  Future<List<PlanOption>> loadPlans() async => [
+        for (final tier in PlanTier.values)
+          PlanOption(
+            tier: tier,
+            priceString: '\$${tier == PlanTier.low
+                ? 3
+                : tier == PlanTier.mid
+                    ? 5
+                    : 10}.00',
+            isCurrent: tier == currentTier,
+          ),
+      ];
+
+  @override
+  Future<void> changePlan(PlanTier tier) async {
+    stubTier = tier;
+    notifyListeners();
+  }
 
   @override
   Future<bool> ensureAllowance() async {

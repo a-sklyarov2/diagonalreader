@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'billing_service.dart';
 import 'camera_service.dart';
+import 'plan_screen.dart';
 import 'reader_screen.dart';
 import 'reading_session.dart';
 import 'summary_level.dart';
@@ -187,21 +188,22 @@ class _CameraScreenState extends State<CameraScreen> {
                       borderRadius: BorderRadius.circular(12),
                       onTap: () async {
                         final billing = _billing;
-                        final before = billing.lastError;
-                        // Subscribers manage (cancel/change); everyone
-                        // else (re)subscribes straight from the pill.
+                        // Subscribers switch plans in-app (Play offers no
+                        // self-serve tier change); everyone else sees
+                        // the paywall to (re)subscribe.
                         if (billing.isSubscriber) {
-                          await billing.manageSubscription();
+                          await PlanScreen.show(context, billing);
                         } else {
+                          final before = billing.lastError;
                           await billing.showPaywall();
-                        }
-                        final error = billing.lastError;
-                        if (context.mounted &&
-                            error != null &&
-                            error != before) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(error)),
-                          );
+                          final error = billing.lastError;
+                          if (context.mounted &&
+                              error != null &&
+                              error != before) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(error)),
+                            );
+                          }
                         }
                       },
                       child: Container(
