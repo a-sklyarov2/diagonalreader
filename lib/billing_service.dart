@@ -369,10 +369,27 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
             : null,
       );
     } catch (e) {
-      _deny(_isCancelled(e) ? null : 'plan change failed: $e');
+      _deny(_purchaseErrorMessage(e));
       return;
     }
     await _awaitCredit();
+  }
+
+  /// Translate store errors into actionable messages. In particular,
+  /// Test Store purchases are not real Play purchases, so Play-side
+  /// replacements ("No active purchase found") can only ever work
+  /// against Google Play (sandbox or production).
+  static String? _purchaseErrorMessage(Object e) {
+    final text = e.toString();
+    if (text.contains('purchaseCancelled') ||
+        text.contains('userCancelled: true')) {
+      return null;
+    }
+    if (text.contains('No active purchase found')) {
+      return 'plan changes need a Google Play subscription — '
+          'test purchases cannot be switched, only re-bought';
+    }
+    return 'plan change failed: $e';
   }
 
   /// Upgrades prorate immediately; downgrades (and laterals) wait for
@@ -386,8 +403,6 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
           ? StoreReplacementMode.withTimeProration
           : StoreReplacementMode.deferred;
 
-  static bool _isCancelled(Object e) =>
-      e.toString().contains('purchaseCancelled');
   /// Test-only: seed entitlement state (the real source is the
   /// RevenueCat CustomerInfo listener, unreachable off-device).
   @visibleForTesting
