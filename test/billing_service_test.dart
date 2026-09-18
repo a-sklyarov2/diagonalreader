@@ -232,6 +232,51 @@ void main() {
     );
   });
 
+  test('resolveTier prefers RC, falls back to server plan', () {
+    expect(
+      RevenueCatBilling.resolveTier(
+        subscriber: true,
+        rcProduct: 'pages_monthly:monthly-mid',
+        serverPlan: PlanTier.low,
+      ),
+      PlanTier.mid,
+    );
+    // Unrecognized entitlement shape (e.g. bare 'pages_monthly')
+    // falls back to the server's last-credited tier.
+    expect(
+      RevenueCatBilling.resolveTier(
+        subscriber: true,
+        rcProduct: 'pages_monthly',
+        serverPlan: PlanTier.mid,
+      ),
+      PlanTier.mid,
+    );
+    expect(
+      RevenueCatBilling.resolveTier(
+        subscriber: true,
+        rcProduct: null,
+        serverPlan: PlanTier.max,
+      ),
+      PlanTier.max,
+    );
+    expect(
+      RevenueCatBilling.resolveTier(
+        subscriber: false,
+        rcProduct: 'pages_monthly:monthly-mid',
+        serverPlan: PlanTier.mid,
+      ),
+      isNull,
+    );
+    expect(
+      RevenueCatBilling.resolveTier(
+        subscriber: true,
+        rcProduct: 'pages_monthly',
+        serverPlan: null,
+      ),
+      isNull,
+    );
+  });
+
   test('FakeBilling gates on quota by default', () async {
     final billing = FakeBilling(
       quota: const QuotaStatus(

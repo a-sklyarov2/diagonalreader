@@ -5,6 +5,7 @@ class QuotaStatus {
     required this.freeTotal,
     required this.paidBalance,
     required this.pro,
+    this.plan,
   });
 
   factory QuotaStatus.fromJson(Map<String, dynamic> json) {
@@ -14,8 +15,12 @@ class QuotaStatus {
       freeTotal: asInt(json['freeTotal']),
       paidBalance: asInt(json['paidBalance']),
       pro: json['pro'] == true,
+      plan: _planFromJson(json['plan']),
     );
   }
+
+  static String? _planFromJson(Object? v) =>
+      v == 'low' || v == 'mid' || v == 'max' ? v as String : null;
 
   /// Free pages consumed out of the initial allowance.
   final int freeUsed;
@@ -28,6 +33,12 @@ class QuotaStatus {
 
   /// RevenueCat `pro_pages` entitlement currently active.
   final bool pro;
+
+  /// Tier of the most recently credited purchase ('low'|'mid'|'max'),
+  /// if the server has ever credited this user. Used as the
+  /// current-plan fallback when the entitlement product id arrives in
+  /// an unrecognized shape.
+  final String? plan;
 
   int get freeLeft => freeTotal - freeUsed < 0 ? 0 : freeTotal - freeUsed;
   int get totalLeft => freeLeft + paidBalance;

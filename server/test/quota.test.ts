@@ -15,6 +15,7 @@ import type { Env } from '../src/summarize';
 function makeFakeDb() {
   const users = new Map<string, { free_used: number; paid_balance: number }>();
   const grants = new Set<string>();
+  const lastGrant = new Map<string, string>(); // user_id → product_id
   const db: D1Db = {
     prepare(query: string): D1Statement {
       const q = query.replace(/\s+/g, ' ').trim();
@@ -34,6 +35,12 @@ function makeFakeDb() {
               ? { rc_event_id: bound[0] }
               : null) as T | null;
           }
+          if (q.startsWith('SELECT product_id FROM grants')) {
+            const product = lastGrant.get(bound[0] as string);
+            return (product
+              ? { product_id: product }
+              : null) as T | null;
+          }
           throw new Error(`fake D1: unexpected SELECT: ${q}`);
         },
         async run() {
@@ -46,6 +53,7 @@ function makeFakeDb() {
           }
           if (q.startsWith('INSERT INTO grants')) {
             grants.add(bound[0] as string);
+            lastGrant.set(bound[1] as string, bound[2] as string);
             return {};
           }
           if (q.startsWith('UPDATE users SET free_used = free_used + 1')) {
@@ -139,6 +147,7 @@ describe('quota storage', () => {
       freeTotal: 10,
       paidBalance: 0,
       pro: false,
+      plan: null,
     });
     for (let i = 0; i < 10; i++) {
       expect(await consumePage(db, 'u1', 10)).toBe('free');
@@ -219,6 +228,7 @@ describe('GET /quota', () => {
       freeTotal: 10,
       paidBalance: 0,
       pro: false,
+      plan: null,
     });
   });
 
@@ -283,6 +293,9 @@ describe('POST /rc-webhook', () => {
       product: 'pagesMax_monthly',
     });
     expect((await getQuota(db, 'u1', 10)).paidBalance).toBe(3600);
+    // The quota view reports the most recently credited tier — the
+    // app's current-plan fallback.
+    expect((await getQuota(db, 'u1', 10)).plan).toBe('max');
   });
 
   it('ignores non-credit events without touching balance', async () => {

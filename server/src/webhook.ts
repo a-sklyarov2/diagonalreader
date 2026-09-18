@@ -12,28 +12,11 @@
  * expirations deliberately do NOT claw back: bought pages stay bought.
  */
 
-import { creditPages, type D1Db } from './quota';
+import { creditPages, TIER_PAGES, type D1Db } from './quota';
 
 export interface Env {
   RC_WEBHOOK_SECRET: string;
 }
-
-/** Tier product id → pages credited per billing period.
- *  Current: single `pages_monthly` subscription with three base
- *  plans (Google's recommended tiered model). Legacy entries stay so
- *  Test Store purchases (mixed-case standalone IDs) and any stray
- *  events from the retired standalone Play subs still credit. */
-export const TIER_PAGES: Record<string, number> = {
-  'pages_monthly:monthly-low': 100,
-  'pages_monthly:monthly-mid': 500,
-  'pages_monthly:monthly-max': 3000,
-  pagesLow_monthly: 100,
-  pageslow_monthly: 100,
-  pagesMid_monthly: 500,
-  pagesmid_monthly: 500,
-  pagesMax_monthly: 3000,
-  pagesmax_monthly: 3000,
-};
 
 /** Event types that grant a fresh period of pages: initial buys,
  *  every auto-renewal, resubscribes after a pause, and tier changes

@@ -33,6 +33,39 @@ export interface QuotaView {
   /** Server never sets this (entitlement lives in RevenueCat, checked
    *  client-side); kept so the app has one quota shape. */
   pro: false;
+  /** Tier of the most recently credited purchase, if any. The app
+   *  uses this as the current-plan fallback when RevenueCat reports
+   *  the entitlement product in an unrecognized shape (e.g. a bare
+   *  subscription id without the base-plan suffix). */
+  plan: TierName | null;
+}
+
+export type TierName = 'low' | 'mid' | 'max';
+
+/** Tier product id (every store variant) → pages credited per period. */
+export const TIER_PAGES: Record<string, number> = {
+  'pages_monthly:monthly-low': 100,
+  'pages_monthly:monthly-mid': 500,
+  'pages_monthly:monthly-max': 3000,
+  pagesLow_monthly: 100,
+  pageslow_monthly: 100,
+  pagesMid_monthly: 500,
+  pagesmid_monthly: 500,
+  pagesMax_monthly: 3000,
+  pagesmax_monthly: 3000,
+};
+
+export function tierOfProduct(productId: string): TierName | null {
+  switch (TIER_PAGES[productId]) {
+    case 100:
+      return 'low';
+    case 500:
+      return 'mid';
+    case 3000:
+      return 'max';
+    default:
+      return null;
+  }
 }
 
 export const DEFAULT_FREE_PAGES = 10;
@@ -61,11 +94,18 @@ export async function getQuota(
       .run();
     row = { free_used: 0, paid_balance: 0 };
   }
+  const grant = await db
+    .prepare(
+      'SELECT product_id FROM grants WHERE user_id = ? ORDER BY rowid DESC LIMIT 1',
+    )
+    .bind(userId)
+    .first<{ product_id: string }>();
   return {
     freeUsed: row.free_used,
     freeTotal: total,
     paidBalance: row.paid_balance,
     pro: false,
+    plan: grant ? tierOfProduct(grant.product_id) : null,
   };
 }
 

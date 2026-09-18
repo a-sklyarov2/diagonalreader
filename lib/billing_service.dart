@@ -143,6 +143,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   bool _ready = false;
   bool _subscriber = false;
   String? _currentProductId;
+  PlanTier? _serverPlan;
   QuotaStatus? _quota;
   bool _refreshing = false;
   String? _lastError;
@@ -160,9 +161,29 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   bool get isSubscriber => _subscriber;
 
   @override
-  PlanTier? get currentTier => _subscriber && _currentProductId != null
-      ? tierOfRcProduct(_currentProductId!)
-      : null;
+  PlanTier? get currentTier => resolveTier(
+        subscriber: _subscriber,
+        rcProduct: _currentProductId,
+        serverPlan: _serverPlan,
+      );
+
+  /// Current tier: prefer the RevenueCat entitlement product, fall
+  /// back to the server's last-credited tier (covers entitlement
+  /// product ids that arrive in unrecognized shapes, e.g. a bare
+  /// subscription id without the base-plan suffix).
+  @visibleForTesting
+  static PlanTier? resolveTier({
+    required bool subscriber,
+    String? rcProduct,
+    PlanTier? serverPlan,
+  }) {
+    if (!subscriber) return null;
+    if (rcProduct != null) {
+      final tier = tierOfRcProduct(rcProduct);
+      if (tier != null) return tier;
+    }
+    return serverPlan;
+  }
 
   /// Configure the SDK (no-op without key/store) and fetch quota once.
   Future<void> init() async {
@@ -199,6 +220,10 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     final entitlement = info.entitlements.all[proEntitlementId];
     final active = entitlement?.isActive ?? false;
     final productId = active ? entitlement?.productIdentifier : null;
+    debugPrint(
+      'RC entitlement: active=$active product=$productId '
+      'purchased=${info.allPurchasedProductIdentifiers}',
+    );
     if (active != _subscriber || productId != _currentProductId) {
       _subscriber = active;
       _currentProductId = productId;
@@ -213,6 +238,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     try {
       final fresh = await _quotaClient.fetchQuota(_userId);
       _quota = fresh;
+      _serverPlan = _planTier(fresh.plan);
       notifyListeners();
     } catch (e) {
       debugPrint('Quota refresh failed: $e');
@@ -220,6 +246,9 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
       _refreshing = false;
     }
   }
+
+  static PlanTier? _planTier(String? name) =>
+      name == null ? null : PlanTier.values.asNameMap()[name];
 
   @override
   Future<bool> ensureAllowance() async {
