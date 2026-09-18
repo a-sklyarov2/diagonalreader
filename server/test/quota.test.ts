@@ -330,6 +330,23 @@ describe('POST /rc-webhook', () => {
       product: 'pagesmid_monthly',
     });
 
+    // Base-plan tiers on the single pages_monthly subscription.
+    const basePlan = await worker.fetch(
+      rcEvent(
+        'INITIAL_PURCHASE',
+        'evt-z',
+        'u3',
+        'pages_monthly:monthly-max',
+      ),
+      env,
+    );
+    expect(basePlan.status).toBe(200);
+    expect(await basePlan.json()).toEqual({
+      credited: 3000,
+      user: 'u3',
+      product: 'pages_monthly:monthly-max',
+    });
+
     const empty = await worker.fetch(
       new Request('https://api.test/rc-webhook', {
         method: 'POST',

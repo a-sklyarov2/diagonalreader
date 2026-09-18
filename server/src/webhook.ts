@@ -19,10 +19,14 @@ export interface Env {
 }
 
 /** Tier product id → pages credited per billing period.
- *  Both casings: Test Store products are mixed-case
- *  (`pagesMid_monthly`) while Play product IDs must be lowercase
- *  (`pagesmid_monthly`) — both credit identically. */
+ *  Current: single `pages_monthly` subscription with three base
+ *  plans (Google's recommended tiered model). Legacy entries stay so
+ *  Test Store purchases (mixed-case standalone IDs) and any stray
+ *  events from the retired standalone Play subs still credit. */
 export const TIER_PAGES: Record<string, number> = {
+  'pages_monthly:monthly-low': 100,
+  'pages_monthly:monthly-mid': 500,
+  'pages_monthly:monthly-max': 3000,
   pagesLow_monthly: 100,
   pageslow_monthly: 100,
   pagesMid_monthly: 500,
