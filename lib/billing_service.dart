@@ -63,12 +63,11 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     Future<PaywallResult> Function(Offering? offering)? paywallPresenter,
     Future<Offering?> Function()? offeringsLoader,
     bool forceStoreEnabled = false,
-    Duration retryDelay = const Duration(seconds: 2),
+    this._retryDelay = const Duration(seconds: 2),
   })  : _quotaClient = quotaClient, // ignore: prefer_initializing_formals
         _userId = userId, // ignore: prefer_initializing_formals
         _apiKey = apiKey, // ignore: prefer_initializing_formals
         _forceStoreEnabled = forceStoreEnabled, // ignore: prefer_initializing_formals
-        _retryDelay = retryDelay,
         _offeringsLoader = offeringsLoader ?? _loadPagesOffering,
         _paywallPresenter = paywallPresenter ??
             ((offering) => RevenueCatUI.presentPaywall(

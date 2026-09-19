@@ -235,19 +235,19 @@ class _CameraScreenState extends State<CameraScreen> {
                       key: const Key('quotaPill'),
                       borderRadius: BorderRadius.circular(12),
                       onTap: () async {
-                        final billing = _billing;
                         // No usable quota (backend unreachable, wrong
                         // token, …) — show the reason, not the paywall.
-                        if (billing.quota == null) {
+                        if (_billing.quota == null) {
                           if (context.mounted) {
                             _showDeviceId(
                               context,
                               widget.session.userId,
-                              billing.quotaError ?? 'quota unavailable',
+                              _billing.quotaError ?? 'quota unavailable',
                             );
                           }
                           return;
                         }
+                        final billing = _billing;
                         final billing = _billing;
                         // Subscribers manage in the store (single plan —
                         // nothing to switch); everyone else subscribes.
