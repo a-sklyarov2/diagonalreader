@@ -1,27 +1,48 @@
 /**
- * RevenueCat webhook → page credits.
+ * RevenueCat webhook → subscription access.
+ *
+ * Single-subscription model: any purchase/renewal of a known product
+ * marks the user unlimited until expires_at; EXPIRATION revokes.
+ * Cancellations deliberately change nothing — access continues until
+ * the already-paid period ends.
  *
  * Dashboard (user action): Integrations → Webhooks → URL
  * `https://<worker>/rc-webhook` with an Authorization header
- * `Bearer <RC_WEBHOOK_SECRET>`. The secret is generated once, stored
- * via `wrangler secret put RC_WEBHOOK_SECRET`, and pasted into the
- * RevenueCat dashboard — never committed.
- *
- * Each subscription period (initial purchase + every renewal) credits
- * the tier's page count as consumable balance. Cancellations and
- * expirations deliberately do NOT claw back: bought pages stay bought.
+ * `Bearer <RC_WEBHOOK_SECRET>` (wrangler secret, never committed).
  */
 
-import { creditPages, TIER_PAGES, type D1Db } from './quota';
+import {
+  activateSubscription,
+  deactivateSubscription,
+  type D1Db,
+} from './quota';
 
 export interface Env {
   RC_WEBHOOK_SECRET: string;
 }
 
-/** Event types that grant a fresh period of pages: initial buys,
- *  every auto-renewal, resubscribes after a pause, and tier changes
- *  (Low↔Mid↔Max mid-period credit the new tier immediately). */
-const CREDIT_EVENTS = new Set([
+/**
+ * Products that unlock unlimited. The `max` base plan is the live
+ * product; every legacy id (Test Store tiers, retired standalone
+ * Play subs) also unlocks — generous, harmless, and keeps old test
+ * purchases working.
+ */
+export const UNLIMITED_PRODUCTS = new Set([
+  'pages_monthly:monthly-max',
+  'pagesMax_monthly',
+  'pagesmax_monthly',
+  'pagesMid_monthly',
+  'pagesmid_monthly',
+  'pagesLow_monthly',
+  'pageslow_monthly',
+  'pages_monthly:monthly-mid',
+  'pages_monthly:monthly-low',
+]);
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Event types that (re)activate unlimited access. */
+const ACTIVATE_EVENTS = new Set([
   'INITIAL_PURCHASE',
   'RENEWAL',
   'UNCANCELLATION',
@@ -34,6 +55,18 @@ interface RcEvent {
   id?: unknown;
   app_user_id?: unknown;
   product_id?: unknown;
+  purchased_at_ms?: unknown;
+  expiration_at_ms?: unknown;
+}
+
+function asMs(value: unknown): number | null {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value !== ''
+        ? Number(value)
+        : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 export async function handleWebhook(
@@ -62,47 +95,41 @@ export async function handleWebhook(
   }
   const event = body.event ?? {};
   const type = typeof event.type === 'string' ? event.type : '';
-  const eventId = typeof event.id === 'string' ? event.id : '';
   const userId =
     typeof event.app_user_id === 'string' ? event.app_user_id : '';
   const productId =
     typeof event.product_id === 'string' ? event.product_id : '';
-  if (!type || !eventId || !userId) {
+  if (!type || !userId) {
     return Response.json(
-      { error: 'missing event.type/id/app_user_id' },
+      { error: 'missing event.type/app_user_id' },
       { status: 400 },
     );
   }
 
-  if (!CREDIT_EVENTS.has(type)) {
+  if (type === 'EXPIRATION') {
+    await deactivateSubscription(db, userId);
+    return Response.json({ expired: true, user: userId }, { status: 200 });
+  }
+  if (!ACTIVATE_EVENTS.has(type)) {
     return Response.json({ ignored: type }, { status: 200 });
   }
-  const pages = TIER_PAGES[productId];
-  if (pages === undefined) {
+  if (!UNLIMITED_PRODUCTS.has(productId)) {
     return Response.json(
       { error: `unknown product_id: ${productId}` },
       { status: 400 },
     );
   }
-
-  // Idempotent: RevenueCat retries deliveries; double-crediting a
-  // renewal would hand out free pages.
-  const seen = await db
-    .prepare('SELECT rc_event_id FROM grants WHERE rc_event_id = ?')
-    .bind(eventId)
-    .first<{ rc_event_id: string }>();
-  if (seen) {
-    return Response.json({ duplicate: true }, { status: 200 });
-  }
-  await db
-    .prepare(
-      'INSERT INTO grants (rc_event_id, user_id, product_id, pages) VALUES (?, ?, ?, ?)',
-    )
-    .bind(eventId, userId, productId, pages)
-    .run();
-  await creditPages(db, userId, pages);
+  const now = Date.now();
+  const expiresAt =
+    asMs(event.expiration_at_ms) ?? now + THIRTY_DAYS_MS;
+  await activateSubscription(db, userId, productId, expiresAt);
   return Response.json(
-    { credited: pages, user: userId, product: productId },
+    {
+      unlimited: true,
+      user: userId,
+      product: productId,
+      until: new Date(expiresAt).toISOString(),
+    },
     { status: 200 },
   );
 }

@@ -53,7 +53,9 @@ void main() {
       auth = request.headers['Authorization'];
       user = request.url.queryParameters['user'];
       return http.Response(
-        '{"freeUsed":9,"freeTotal":10,"paidBalance":500,"pro":true}',
+        '{"freeUsed":9,"freeTotal":100,"paidBalance":91, "pro":false,'
+        '"unlimited":false,"paidUsed":0,"paidCap":10000,'
+        '"dailyUsed":0,"dailyCap":500,"month":"2026-09"}',
         200,
       );
     });
@@ -67,12 +69,13 @@ void main() {
     expect(auth, 'Bearer secret');
     expect(user, 'android:abc');
     expect(quota.freeUsed, 9);
-    expect(quota.freeTotal, 10);
-    expect(quota.freeLeft, 1);
-    expect(quota.paidBalance, 500);
-    expect(quota.totalLeft, 501);
-    expect(quota.pro, isTrue);
+    expect(quota.freeTotal, 100);
+    expect(quota.freeLeft, 91);
+    expect(quota.paidBalance, 91);
+    expect(quota.pro, isFalse);
+    expect(quota.unlimited, isFalse);
     expect(quota.canSummarize, isTrue);
+    expect(quota.pillLabel, '9/100');
   });
 
   test('fetchQuota throws on non-200', () async {

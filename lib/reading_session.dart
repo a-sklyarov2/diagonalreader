@@ -163,9 +163,27 @@ class ReadingSession extends ChangeNotifier {
         page.finish();
       }
     } catch (e) {
-      page.fail(e);
+      page.fail(_friendlyError(e));
     }
     unawaited(_persist());
+  }
+
+  /// Quota errors arrive as HTTP 402/429 from the proxy — translate
+  /// them into actionable messages instead of raw status codes.
+  static String _friendlyError(Object e) {
+    if (e is OpenRouterException) {
+      if (e.statusCode == 402) {
+        return 'Out of pages — subscribe for unlimited.';
+      }
+      if (e.statusCode == 429) {
+        final body = e.bodyExcerpt;
+        if (body.contains('daily_limit_reached')) {
+          return 'Daily limit reached — new pages tomorrow.';
+        }
+        return 'Monthly cap reached — new pages next month.';
+      }
+    }
+    return e.toString();
   }
 
   Future<void> _persist() {

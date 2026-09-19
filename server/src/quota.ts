@@ -1,14 +1,18 @@
 /**
- * Page quota storage (Cloudflare D1).
+ * Page quota: 100 free pages per calendar month (reset, no rollover),
+ * or unlimited* with an active subscription.
  *
- * Every user (stable device id, see app DeviceIdentity) starts with a
- * free allowance (default 10). Purchases credit a consumable page
- * balance via the RevenueCat webhook. Summarization spends free pages
- * first, then purchased ones.
+ * Unlimited = 5000 guaranteed pages/month with guardrails against
+ * margin destruction: 500 pages/day, 10000 pages/month hard cap.
  *
- * The D1 access is typed through narrow structural interfaces so unit
- * tests can substitute an in-memory fake — the real D1Database
- * satisfies them without adaptation.
+ * State (Cloudflare D1):
+ *   subscriptions(user_id, product_id, expires_at) — maintained from
+ *     RevenueCat webhooks; access is live while expires_at > now.
+ *   usage(user_id, month, day, free_used, paid_used) — one row per
+ *     user per day; monthly windows fall out naturally.
+ *
+ * D1 access stays behind narrow structural interfaces so unit tests
+ * can substitute an in-memory fake.
  */
 
 export interface D1Statement {
@@ -21,155 +25,228 @@ export interface D1Db {
   prepare(query: string): D1Statement;
 }
 
-export interface QuotaRow {
-  free_used: number;
-  paid_balance: number;
-}
-
 export interface QuotaView {
+  /** Legacy compat: monthly free pages consumed. */
   freeUsed: number;
+  /** Free pages per month (100). */
   freeTotal: number;
+  /**
+   * Legacy compat for old app builds: remaining monthly allowance
+   * (free remainder, or remaining paid cap when subscribed).
+   */
   paidBalance: number;
-  /** Server never sets this (entitlement lives in RevenueCat, checked
-   *  client-side); kept so the app has one quota shape. */
+  /** Server never sets this (entitlement lives in RevenueCat). */
   pro: false;
-  /** Tier of the most recently credited purchase, if any. The app
-   *  uses this as the current-plan fallback when RevenueCat reports
-   *  the entitlement product in an unrecognized shape (e.g. a bare
-   *  subscription id without the base-plan suffix). */
-  plan: TierName | null;
+  /** True while a subscription is live (expires_at > now). */
+  unlimited: boolean;
+  /** Paid pages consumed in this calendar month. */
+  paidUsed: number;
+  /** Paid hard cap per month (10000). */
+  paidCap: number;
+  /** Paid pages consumed today (UTC). */
+  dailyUsed: number;
+  /** Paid daily cap (500). */
+  dailyCap: number;
+  /** Current billing window, YYYY-MM (UTC). */
+  month: string;
 }
 
-export type TierName = 'low' | 'mid' | 'max';
+export const FREE_PAGES_PER_MONTH = 100;
+export const PAID_PAGES_PER_MONTH = 10000;
+export const PAID_PAGES_PER_DAY = 500;
 
-/** Tier product id (every store variant) → pages credited per period. */
-export const TIER_PAGES: Record<string, number> = {
-  'pages_monthly:monthly-low': 100,
-  'pages_monthly:monthly-mid': 500,
-  'pages_monthly:monthly-max': 3000,
-  pagesLow_monthly: 100,
-  pageslow_monthly: 100,
-  pagesMid_monthly: 500,
-  pagesmid_monthly: 500,
-  pagesMax_monthly: 3000,
-  pagesmax_monthly: 3000,
-};
-
-export function tierOfProduct(productId: string): TierName | null {
-  switch (TIER_PAGES[productId]) {
-    case 100:
-      return 'low';
-    case 500:
-      return 'mid';
-    case 3000:
-      return 'max';
-    default:
-      return null;
-  }
-}
-
-export const DEFAULT_FREE_PAGES = 10;
-
-export function freeTotal(env: { FREE_PAGES?: string }): number {
+export function defaultFreeTotal(env: { FREE_PAGES?: string }): number {
   const n = parseInt(env.FREE_PAGES ?? '', 10);
-  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_FREE_PAGES;
+  return Number.isFinite(n) && n >= 0 ? n : FREE_PAGES_PER_MONTH;
 }
 
-/** Current allowance, creating the user row on first sight. */
-export async function getQuota(
+export function monthOf(date: Date): string {
+  return date.toISOString().slice(0, 7);
+}
+
+export function dayOf(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+interface SubRow {
+  product_id: string;
+  expires_at: number;
+}
+
+/** Live subscription for the user, if any. */
+export async function getSubscription(
   db: D1Db,
   userId: string,
-  total: number,
-): Promise<QuotaView> {
-  let row = await db
-    .prepare('SELECT free_used, paid_balance FROM users WHERE user_id = ?')
+  nowMs: number,
+): Promise<SubRow | null> {
+  const row = await db
+    .prepare('SELECT product_id, expires_at FROM subscriptions WHERE user_id = ?')
     .bind(userId)
-    .first<QuotaRow>();
-  if (!row) {
-    await db
-      .prepare(
-        'INSERT INTO users (user_id, free_used, paid_balance) VALUES (?, 0, 0)',
-      )
-      .bind(userId)
-      .run();
-    row = { free_used: 0, paid_balance: 0 };
-  }
-  const grant = await db
+    .first<SubRow>();
+  if (!row || row.expires_at <= nowMs) return null;
+  return row;
+}
+
+async function monthSums(
+  db: D1Db,
+  userId: string,
+  month: string,
+): Promise<{ free_used: number; paid_used: number }> {
+  const row = await db
     .prepare(
-      'SELECT product_id FROM grants WHERE user_id = ? ORDER BY rowid DESC LIMIT 1',
+      'SELECT COALESCE(SUM(free_used),0) AS free_used, COALESCE(SUM(paid_used),0) AS paid_used FROM usage WHERE user_id = ? AND month = ?',
     )
-    .bind(userId)
-    .first<{ product_id: string }>();
+    .bind(userId, month)
+    .first<{ free_used: number; paid_used: number }>();
   return {
-    freeUsed: row.free_used,
-    freeTotal: total,
-    paidBalance: row.paid_balance,
-    pro: false,
-    plan: grant ? tierOfProduct(grant.product_id) : null,
+    free_used: row?.free_used ?? 0,
+    paid_used: row?.paid_used ?? 0,
   };
 }
 
-/**
- * Spend one page: free allowance first, then purchased balance.
- * Returns which pool was spent, or null when the user is exhausted
- * (caller maps that to HTTP 402).
- */
+async function todayPaid(
+  db: D1Db,
+  userId: string,
+  month: string,
+  day: string,
+): Promise<number> {
+  const row = await db
+    .prepare(
+      'SELECT paid_used FROM usage WHERE user_id = ? AND month = ? AND day = ?',
+    )
+    .bind(userId, month, day)
+    .first<{ paid_used: number }>();
+  return row?.paid_used ?? 0;
+}
+
+async function bump(
+  db: D1Db,
+  userId: string,
+  month: string,
+  day: string,
+  column: 'free_used' | 'paid_used',
+  delta: 1 | -1,
+): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO usage (user_id, month, day, free_used, paid_used) VALUES (?, ?, ?, 0, 0) ON CONFLICT(user_id, month, day) DO NOTHING',
+    )
+    .bind(userId, month, day)
+    .run();
+  await db
+    .prepare(
+      column === 'free_used'
+        ? 'UPDATE usage SET free_used = CASE WHEN free_used + ? < 0 THEN 0 ELSE free_used + ? END WHERE user_id = ? AND month = ? AND day = ?'
+        : 'UPDATE usage SET paid_used = CASE WHEN paid_used + ? < 0 THEN 0 ELSE paid_used + ? END WHERE user_id = ? AND month = ? AND day = ?',
+    )
+    .bind(delta, delta, userId, month, day)
+    .run();
+}
+
+/** Current allowance (+ legacy fields for old app builds). */
+export async function getQuota(
+  db: D1Db,
+  userId: string,
+  freeTotal: number,
+  now: Date = new Date(),
+): Promise<QuotaView> {
+  const month = monthOf(now);
+  const day = dayOf(now);
+  const sub = await getSubscription(db, userId, now.getTime());
+  const sums = await monthSums(db, userId, month);
+  const daily = await todayPaid(db, userId, month, day);
+  const unlimited = sub !== null;
+  const freeLeft = Math.max(0, freeTotal - sums.free_used);
+  return {
+    freeUsed: sums.free_used,
+    freeTotal,
+    paidBalance: unlimited
+      ? Math.max(0, PAID_PAGES_PER_MONTH - sums.paid_used)
+      : freeLeft,
+    pro: false,
+    unlimited,
+    paidUsed: sums.paid_used,
+    paidCap: PAID_PAGES_PER_MONTH,
+    dailyUsed: daily,
+    dailyCap: PAID_PAGES_PER_DAY,
+    month,
+  };
+}
+
+export type SpendOutcome =
+  | { ok: true; kind: 'free' | 'paid' }
+  | { ok: false; code: 'quota_exhausted' | 'daily_limit_reached' | 'monthly_cap_reached' };
+
+/** Spend one page. Monthly/daily windows fall out of the date keys. */
 export async function consumePage(
   db: D1Db,
   userId: string,
-  total: number,
-): Promise<'free' | 'paid' | null> {
-  const quota = await getQuota(db, userId, total);
-  if (quota.freeUsed < total) {
-    await db
-      .prepare(
-        "UPDATE users SET free_used = free_used + 1, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE user_id = ?",
-      )
-      .bind(userId)
-      .run();
-    return 'free';
+  freeTotal: number,
+  now: Date = new Date(),
+): Promise<SpendOutcome> {
+  const month = monthOf(now);
+  const day = dayOf(now);
+  const sub = await getSubscription(db, userId, now.getTime());
+  if (sub !== null) {
+    const sums = await monthSums(db, userId, month);
+    if (sums.paid_used >= PAID_PAGES_PER_MONTH) {
+      return { ok: false, code: 'monthly_cap_reached' };
+    }
+    const daily = await todayPaid(db, userId, month, day);
+    if (daily >= PAID_PAGES_PER_DAY) {
+      return { ok: false, code: 'daily_limit_reached' };
+    }
+    await bump(db, userId, month, day, 'paid_used', 1);
+    return { ok: true, kind: 'paid' };
   }
-  if (quota.paidBalance > 0) {
-    await db
-      .prepare(
-        "UPDATE users SET paid_balance = paid_balance - 1, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE user_id = ?",
-      )
-      .bind(userId)
-      .run();
-    return 'paid';
+  const sums = await monthSums(db, userId, month);
+  if (sums.free_used >= freeTotal) {
+    return { ok: false, code: 'quota_exhausted' };
   }
-  return null;
+  await bump(db, userId, month, day, 'free_used', 1);
+  return { ok: true, kind: 'free' };
 }
 
-/** Give back a spent page (e.g. upstream failed before streaming). */
+/** Give back a spent page (upstream failed before streaming). */
 export async function refundPage(
   db: D1Db,
   userId: string,
   kind: 'free' | 'paid',
+  now: Date = new Date(),
 ): Promise<void> {
-  await getQuota(db, userId, DEFAULT_FREE_PAGES); // ensure row
+  await bump(
+    db,
+    userId,
+    monthOf(now),
+    dayOf(now),
+    kind === 'free' ? 'free_used' : 'paid_used',
+    -1,
+  );
+}
+
+/** Mark a subscription live until expiresAtMs (insert or extend). */
+export async function activateSubscription(
+  db: D1Db,
+  userId: string,
+  productId: string,
+  expiresAtMs: number,
+): Promise<void> {
   await db
     .prepare(
-      kind === 'free'
-        ? 'UPDATE users SET free_used = CASE WHEN free_used > 0 THEN free_used - 1 ELSE 0 END WHERE user_id = ?'
-        : 'UPDATE users SET paid_balance = paid_balance + 1 WHERE user_id = ?',
+      "INSERT INTO subscriptions (user_id, product_id, expires_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET product_id = excluded.product_id, expires_at = excluded.expires_at, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
     )
-    .bind(userId)
+    .bind(userId, productId, expiresAtMs)
     .run();
 }
 
-/** Credit purchased pages (idempotency is enforced by the caller via
- *  the grants table — see webhook.ts). */
-export async function creditPages(
+/** Drop subscription access (on EXPIRATION; cancellations keep access
+ *  until expires_at, so they need no state change). */
+export async function deactivateSubscription(
   db: D1Db,
   userId: string,
-  pages: number,
 ): Promise<void> {
-  await getQuota(db, userId, DEFAULT_FREE_PAGES); // ensure row
   await db
-    .prepare(
-      "UPDATE users SET paid_balance = paid_balance + ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE user_id = ?",
-    )
-    .bind(pages, userId)
+    .prepare('DELETE FROM subscriptions WHERE user_id = ?')
+    .bind(userId)
     .run();
 }

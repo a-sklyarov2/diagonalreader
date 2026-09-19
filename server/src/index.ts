@@ -2,11 +2,13 @@
  * Diagonal API — thin streaming proxy in front of OpenRouter.
  *
  * POST /summarize (multipart: image=<jpeg>, level=low|high|max;
- *   header X-User-Id) → spends one page of quota, then builds the
- *   prompt server-side, calls OpenRouter with the secret key, and
- *   streams the SSE response straight back. 402 quota_exhausted when
- *   the free allowance + purchased balance are spent.
- * GET /quota?user=<id> → { freeUsed, freeTotal, paidBalance, pro }
+ *   header X-User-Id) → spends one page of quota (100 free/month or
+ *   subscriber guardrails), then builds the prompt server-side,
+ *   calls OpenRouter with the secret key, and streams the SSE
+ *   response straight back. 402 quota_exhausted (paywall) or 429
+ *   daily/monthly caps (wait it out).
+ * GET /quota?user=<id> → { freeUsed, freeTotal, paidBalance, pro,
+ *   unlimited, paidUsed, paidCap, dailyUsed, dailyCap, month }
  * POST /rc-webhook (RevenueCat events) → credits purchased pages.
  * GET /health → { ok: true, model }
  *
@@ -26,7 +28,7 @@ import {
   summarize,
   type Env,
 } from './summarize';
-import { freeTotal, getQuota } from './quota';
+import { defaultFreeTotal, getQuota } from './quota';
 import { handleWebhook } from './webhook';
 
 export default {
@@ -65,7 +67,7 @@ export default {
         );
       }
       return Response.json(
-        await getQuota(env.DB, userId, freeTotal(env)),
+        await getQuota(env.DB, userId, defaultFreeTotal(env)),
       );
     }
     if (request.method === 'POST' && url.pathname === '/rc-webhook') {

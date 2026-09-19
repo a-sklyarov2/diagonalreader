@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 
 import 'billing_service.dart';
 import 'camera_service.dart';
-import 'plan_screen.dart';
 import 'reader_screen.dart';
 import 'reading_session.dart';
 import 'summary_level.dart';
@@ -180,19 +179,17 @@ class _CameraScreenState extends State<CameraScreen> {
                     if (!_billing.ready || quota == null) {
                       return const SizedBox.shrink();
                     }
-                    final label = _billing.isSubscriber
-                        ? '★ ${quota.totalLeft}'
-                        : '${quota.totalLeft} pages';
+                    final label = quota.pillLabel;
                     return InkWell(
                       key: const Key('quotaPill'),
                       borderRadius: BorderRadius.circular(12),
                       onTap: () async {
                         final billing = _billing;
-                        // Subscribers switch plans in-app (Play offers no
-                        // self-serve tier change); everyone else sees
-                        // the paywall to (re)subscribe.
-                        if (billing.isSubscriber) {
-                          await PlanScreen.show(context, billing);
+                        // Subscribers manage in the store (single plan —
+                        // nothing to switch); everyone else subscribes.
+                        if (billing.isSubscriber ||
+                            (billing.quota?.unlimited ?? false)) {
+                          await billing.manageSubscription();
                         } else {
                           final before = billing.lastError;
                           await billing.showPaywall();
@@ -224,15 +221,14 @@ class _CameraScreenState extends State<CameraScreen> {
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            if (_billing.isSubscriber)
-                              const Padding(
-                                padding: EdgeInsets.only(left: 4),
-                                child: Icon(
-                                  Icons.settings,
-                                  size: 12,
-                                  color: Colors.white70,
-                                ),
+                            const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(
+                                Icons.settings,
+                                size: 12,
+                                color: Colors.white70,
                               ),
+                            ),
                           ],
                         ),
                       ),

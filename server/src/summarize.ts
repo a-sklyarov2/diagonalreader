@@ -6,7 +6,7 @@
 
 import {
   consumePage,
-  freeTotal,
+  defaultFreeTotal,
   refundPage,
   type D1Db,
 } from './quota';
@@ -124,9 +124,9 @@ export async function summarize(
     return Response.json({ error: 'image too large' }, { status: 413 });
   }
 
-  // Spend one page before calling the paid upstream. Free allowance
-  // first, then purchased balance; exhausted → 402 so the app can
-  // show the paywall. Skipped when no D1 is bound (tests/dev).
+  // Spend one page before calling the paid upstream: 100 free pages
+  // per calendar month, or the subscriber guardrails (500/day,
+  // 10k/month). Skipped when no D1 is bound (tests/dev).
   const db = env.DB;
   let spent: 'free' | 'paid' | null = null;
   let quotaUser = '';
@@ -138,13 +138,17 @@ export async function summarize(
         { status: 400 },
       );
     }
-    spent = await consumePage(db, quotaUser, freeTotal(env));
-    if (spent === null) {
-      return Response.json(
-        { error: 'quota_exhausted' },
-        { status: 402 },
-      );
+    const outcome = await consumePage(
+      db,
+      quotaUser,
+      defaultFreeTotal(env),
+    );
+    if (!outcome.ok) {
+      // Free exhaustion → paywall. Daily/monthly caps → wait it out.
+      const status = outcome.code === 'quota_exhausted' ? 402 : 429;
+      return Response.json({ error: outcome.code }, { status });
     }
+    spent = outcome.kind;
   }
 
   const bytes = new Uint8Array(await image.arrayBuffer());

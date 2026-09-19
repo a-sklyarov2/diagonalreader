@@ -108,6 +108,8 @@ void main() {
         history: history,
       );
       final page = await session.startPage(src.path, SummaryLevel.max);
+      // Let the unawaited streaming run finish (load-sensitive).
+      await Future<void>.delayed(const Duration(milliseconds: 20));
       await Future.delayed(Duration.zero);
       await Future.delayed(Duration.zero);
       expect(page.text, 'saved');
