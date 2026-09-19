@@ -6,6 +6,14 @@ compatibility_date = "2026-09-01"
 # never stored here — pass it via CLOUDFLARE_API_TOKEN env var).
 account_id = "3a3c78db80d271226caeb10f8ba124e8"
 
+# Custom domains (zone_id is a public DNS identifier, not a secret).
+# Apex serves the landing + /privacy-policy; api.* serves the app API.
+# workers.dev stays enabled so already-shipped builds keep working.
+routes = [
+  { pattern = "diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
+  { pattern = "api.diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
+]
+
 [vars]
 MODEL = "google/gemini-3.5-flash-lite"
 

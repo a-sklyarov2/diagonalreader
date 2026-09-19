@@ -11,6 +11,8 @@
  *   unlimited, paidUsed, paidCap, dailyUsed, dailyCap, month }
  * POST /rc-webhook (RevenueCat events) → credits purchased pages.
  * GET /health → { ok: true, model }
+ * GET /privacy-policy → static privacy policy page (apex domain).
+ * GET / → minimal landing page (apex domain).
  *
  * NOTE: only a default export here — extra value exports break the
  * Workers runtime. Shared code lives in summarize.ts / quota.ts /
@@ -30,6 +32,13 @@ import {
 } from './summarize';
 import { defaultFreeTotal, getQuota } from './quota';
 import { handleWebhook } from './webhook';
+import { landingHtml, privacyPolicyHtml } from './site';
+
+function html(body: string): Response {
+  return new Response(body, {
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  });
+}
 
 export default {
   async fetch(
@@ -82,6 +91,12 @@ export default {
         { RC_WEBHOOK_SECRET: env.RC_WEBHOOK_SECRET ?? '' },
         env.DB,
       );
+    }
+    if (request.method === 'GET' && url.pathname === '/privacy-policy') {
+      return html(privacyPolicyHtml);
+    }
+    if (request.method === 'GET' && url.pathname === '/') {
+      return html(landingHtml);
     }
     return new Response('Not found', { status: 404 });
   },

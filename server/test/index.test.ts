@@ -69,8 +69,7 @@ describe('levels + prompt', () => {
 describe('fetch router', () => {
   beforeEach(() => vi.unstubAllGlobals());
 
-  it('GET /health reports the model', async () => {
-    const res = await worker.fetch(
+  it('GET /health reports the model', async () => {    const res = await worker.fetch(
       new Request('https://api.test/health'),
       env,
     );
@@ -79,6 +78,26 @@ describe('fetch router', () => {
       ok: true,
       model: 'google/gemini-3.5-flash-lite',
     });
+  });
+
+  it('serves the privacy policy + landing as HTML', async () => {
+    const policy = await worker.fetch(
+      new Request('https://diagonalreader.com/privacy-policy'),
+      env,
+    );
+    expect(policy.status).toBe(200);
+    expect(policy.headers.get('content-type')).toContain('text/html');
+    const policyText = await policy.text();
+    expect(policyText).toContain('Privacy Policy — Diagonal Reader');
+    expect(policyText).toContain('not stored on our servers');
+    expect(policyText).toContain('privacy@diagonalreader.com');
+
+    const landing = await worker.fetch(
+      new Request('https://diagonalreader.com/'),
+      env,
+    );
+    expect(landing.status).toBe(200);
+    expect(await landing.text()).toContain('/privacy-policy');
   });
 
   it('rejects missing/bad auth', async () => {
