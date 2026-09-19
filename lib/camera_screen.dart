@@ -248,7 +248,6 @@ class _CameraScreenState extends State<CameraScreen> {
                           return;
                         }
                         final billing = _billing;
-                        final billing = _billing;
                         // Subscribers manage in the store (single plan —
                         // nothing to switch); everyone else subscribes.
                         if (billing.isSubscriber ||
