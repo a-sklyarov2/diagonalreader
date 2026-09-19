@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 import 'billing_service.dart';
 import 'camera_service.dart';
@@ -85,6 +86,10 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
       );
+      // The page was paid for while the reader was open — re-fetch
+      // so the pill increments the moment we return, not on the
+      // next capture.
+      unawaited(_billing.refreshQuota());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
