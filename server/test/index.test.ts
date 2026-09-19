@@ -100,6 +100,17 @@ describe('fetch router', () => {
     expect(await landing.text()).toContain('/privacy-policy');
   });
 
+  it('serves the data-deletion page', async () => {
+    const res = await worker.fetch(
+      new Request('https://diagonalreader.com/data-deletion'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('long-press the page counter');
+    expect(text).toContain('sklyarovaleksandar@gmail.com');
+  });
+
   it('rejects missing/bad auth', async () => {
     const noAuth = await worker.fetch(
       new Request('https://api.test/summarize', { method: 'POST' }),

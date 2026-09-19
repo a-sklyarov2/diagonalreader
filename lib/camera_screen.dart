@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
 
 import 'billing_service.dart';
@@ -50,6 +51,33 @@ class _CameraScreenState extends State<CameraScreen> {
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
+  }
+
+  /// Long-press on the quota pill reveals the anonymous device id so
+  /// users can reference it in privacy/deletion requests.
+  void _showDeviceId(BuildContext context, String? userId) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Device ID'),
+        content: SelectableText(userId ?? 'unknown'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              if (userId != null) {
+                Clipboard.setData(ClipboardData(text: userId));
+              }
+              Navigator.of(context).pop();
+            },
+            child: const Text('Copy'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _capture() async {
@@ -208,6 +236,8 @@ class _CameraScreenState extends State<CameraScreen> {
                           }
                         }
                       },
+                      onLongPress: () =>
+                          _showDeviceId(context, widget.session.userId),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 4),

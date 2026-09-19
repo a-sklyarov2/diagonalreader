@@ -85,6 +85,10 @@ class ReadingSession extends ChangeNotifier {
   /// Stable device user id, forwarded to the proxy for quota metering.
   final String? _userId;
 
+  /// The id server-side records are keyed by (shown in-app so users
+  /// can reference it in privacy requests).
+  String? get userId => _userId;
+
   final List<SummaryPage> pages = [];
 
   /// Load previously saved pages (call once at startup).

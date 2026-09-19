@@ -32,7 +32,7 @@ import {
 } from './summarize';
 import { defaultFreeTotal, getQuota } from './quota';
 import { handleWebhook } from './webhook';
-import { landingHtml, privacyPolicyHtml } from './site';
+import { deletionHtml, landingHtml, privacyPolicyHtml } from './site';
 
 function html(body: string): Response {
   return new Response(body, {
@@ -94,6 +94,9 @@ export default {
     }
     if (request.method === 'GET' && url.pathname === '/privacy-policy') {
       return html(privacyPolicyHtml);
+    }
+    if (request.method === 'GET' && url.pathname === '/data-deletion') {
+      return html(deletionHtml);
     }
     if (request.method === 'GET' && url.pathname === '/') {
       return html(landingHtml);

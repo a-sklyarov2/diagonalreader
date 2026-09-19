@@ -74,9 +74,10 @@ children under 13. No children's data is knowingly collected.</p>
 <h2>Your rights</h2>
 <p>Depending on where you live (e.g. GDPR, CCPA) you may request
 access, correction, or deletion of data linked to your device
-identifier. Because there are no accounts, include your device
-identifier (shown in the app on request) so we can find your records.
-Contact: <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+identifier. See <a href="/data-deletion">data deletion</a> for the
+one-minute process: your on-device history deletes instantly in the
+app, and server records go on emailed request. Contact:
+<a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
 
 <h2>Changes</h2>
 <p>Material changes to this policy will be published here with a new
@@ -85,6 +86,39 @@ accept it.</p>
 
 <h2>Contact</h2>
 <p><a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a></p>
+</body>
+</html>`;
+
+export const deletionHtml = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data deletion — Diagonal Reader</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:44rem;margin:0 auto;padding:2rem 1.25rem;line-height:1.6;color:#1a1a1a}
+h1{font-size:1.6rem}h2{font-size:1.15rem;margin-top:2rem}
+code{background:#f0f0f0;padding:.1rem .35rem;border-radius:4px}
+</style>
+</head>
+<body>
+<h1>Data deletion — Diagonal Reader</h1>
+<p>There are no accounts, so there is nothing to log into. Deleting
+your data takes two short steps:</p>
+<h2>1. On your phone (instant)</h2>
+<p>Open the app and tap the red bin on any summary to delete that
+page's photo and text immediately. Uninstalling the app removes
+whatever remains.</p>
+<h2>2. On our servers (by email)</h2>
+<p>Email <a href="mailto:${CONTACT_EMAIL}?subject=Data%20deletion">${CONTACT_EMAIL}</a>
+with subject <code>Data deletion</code> and include your
+<strong>Device ID</strong> so we can find your records: in the app,
+<strong>long-press the page counter</strong> at the top of the camera
+screen, then Copy. We delete your monthly counters and any
+subscription record and confirm back within 30 days.</p>
+<p>Note: monthly page counters reset automatically, and subscription
+records disappear on their own when the subscription expires —
+emailing only hurries that along.</p>
 </body>
 </html>`;
 
