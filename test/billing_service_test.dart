@@ -143,6 +143,52 @@ void main() {
     expect(billing.lastError, contains('tomorrow'));
   });
 
+  test('quota failure is recorded, not swallowed', () async {
+    final failing = DiagonalProxyClient(
+      baseUrl: 'https://api.test',
+      proxyToken: 'wrong-token',
+      httpClient: MockClient(
+        (_) async => http.Response('{"error":"unauthorized"}', 401),
+      ),
+    );
+    final billing = RevenueCatBilling(
+      quotaClient: failing,
+      userId: 'android:test',
+      apiKey: '',
+      retryDelay: Duration.zero,
+    );
+    await billing.init();
+    expect(billing.quota, isNull);
+    expect(billing.quotaError, contains('401'));
+  });
+
+  test('subscriber with unreachable server polls, never paywalls', () async {
+    var presented = false;
+    final failing = DiagonalProxyClient(
+      baseUrl: 'https://api.test',
+      proxyToken: 'wrong-token',
+      httpClient: MockClient(
+        (_) async => http.Response('{"error":"unauthorized"}', 401),
+      ),
+    );
+    final billing = RevenueCatBilling(
+      quotaClient: failing,
+      userId: 'android:test',
+      apiKey: 'test-key',
+      forceStoreEnabled: true,
+      retryDelay: Duration.zero,
+      paywallPresenter: (_) async {
+        presented = true;
+        throw StateError('subscriber — must not present paywall');
+      },
+    );
+    await billing.init();
+    billing.seedSubscriber(true);
+    expect(await billing.ensureAllowance(), isFalse);
+    expect(presented, isFalse);
+    expect(billing.lastError, contains('not yet active'));
+  });
+
   test('FakeBilling gates on quota by default', () async {
     final billing = FakeBilling(quota: quota());
     expect(await billing.ensureAllowance(), isTrue);

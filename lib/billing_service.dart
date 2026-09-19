@@ -33,6 +33,11 @@ abstract class BillingApi extends ChangeNotifier {
   /// (null when the last attempt succeeded or none was made).
   String? get lastError;
 
+  /// Human-readable reason the last quota fetch failed (null when the
+  /// last fetch succeeded). Surfaced in-app so a dead backend, wrong
+  /// token, or bad URL shows up as text instead of a silent paywall.
+  String? get quotaError;
+
   Future<void> refreshQuota();
   Future<bool> ensureAllowance();
 
@@ -58,10 +63,12 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     Future<PaywallResult> Function(Offering? offering)? paywallPresenter,
     Future<Offering?> Function()? offeringsLoader,
     bool forceStoreEnabled = false,
+    Duration retryDelay = const Duration(seconds: 2),
   })  : _quotaClient = quotaClient, // ignore: prefer_initializing_formals
         _userId = userId, // ignore: prefer_initializing_formals
         _apiKey = apiKey, // ignore: prefer_initializing_formals
         _forceStoreEnabled = forceStoreEnabled, // ignore: prefer_initializing_formals
+        _retryDelay = retryDelay,
         _offeringsLoader = offeringsLoader ?? _loadPagesOffering,
         _paywallPresenter = paywallPresenter ??
             ((offering) => RevenueCatUI.presentPaywall(
@@ -73,6 +80,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   final String _userId;
   final String _apiKey;
   final bool _forceStoreEnabled;
+  final Duration _retryDelay;
   final Future<Offering?> Function() _offeringsLoader;
   final Future<PaywallResult> Function(Offering? offering)
       _paywallPresenter;
@@ -83,6 +91,10 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
   QuotaStatus? _quota;
   bool _refreshing = false;
   String? _lastError;
+  String? _quotaError;
+
+  @override
+  String? get quotaError => _quotaError;
 
   @override
   QuotaStatus? get quota => _quota;
@@ -155,8 +167,10 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     _refreshing = true;
     try {
       _quota = await _quotaClient.fetchQuota(_userId);
+      _quotaError = null;
       notifyListeners();
     } catch (e) {
+      _quotaError = 'quota failed: $e';
       debugPrint('Quota refresh failed: $e');
     } finally {
       _refreshing = false;
@@ -177,6 +191,13 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
     }
     if (!_rcEnabled) {
       _deny('purchases unavailable on this build');
+      return false;
+    }
+    // The store knows an active subscription but the server hasn't
+    // caught up (activation webhook pending) — polling, never another
+    // paywall on top of a subscription Play already confirmed.
+    if (_subscriber) {
+      await _awaitCredit();
       return false;
     }
     if (!await _buyPages()) return false;
@@ -252,7 +273,7 @@ class RevenueCatBilling extends ChangeNotifier implements BillingApi {
         notifyListeners();
         return true;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+      await Future<void>.delayed(_retryDelay);
     }
     return _deny('purchase done, access not yet active — retry soon');
   }
@@ -303,6 +324,9 @@ class FakeBilling extends BillingApi {
 
   @override
   String? get lastError => null;
+
+  @override
+  String? get quotaError => null;
 
   @override
   QuotaStatus? get quota => _quota;

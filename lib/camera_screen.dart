@@ -54,13 +54,28 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   /// Long-press on the quota pill reveals the anonymous device id so
-  /// users can reference it in privacy/deletion requests.
-  void _showDeviceId(BuildContext context, String? userId) {
+  /// users can reference it in privacy/deletion requests. [error]
+  /// carries the last quota failure, if any.
+  void _showDeviceId(BuildContext context, String? userId,
+      [String? error]) {
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Device ID'),
-        content: SelectableText(userId ?? 'unknown'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SelectableText(userId ?? 'unknown'),
+            if (error != null) ...[
+              const SizedBox(height: 12),
+              SelectableText(
+                error,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () {
@@ -209,14 +224,30 @@ class _CameraScreenState extends State<CameraScreen> {
                   listenable: _billing,
                   builder: (context, _) {
                     final quota = _billing.quota;
-                    if (!_billing.ready || quota == null) {
+                    if (!_billing.ready) {
                       return const SizedBox.shrink();
                     }
-                    final label = quota.pillLabel;
+                    // Quota unknown (backend unreachable, wrong token,
+                    // …): show a tappable placeholder that reveals the
+                    // reason instead of failing silently.
+                    final label = quota?.pillLabel ?? '…';
                     return InkWell(
                       key: const Key('quotaPill'),
                       borderRadius: BorderRadius.circular(12),
                       onTap: () async {
+                        final billing = _billing;
+                        // No usable quota (backend unreachable, wrong
+                        // token, …) — show the reason, not the paywall.
+                        if (billing.quota == null) {
+                          if (context.mounted) {
+                            _showDeviceId(
+                              context,
+                              widget.session.userId,
+                              billing.quotaError ?? 'quota unavailable',
+                            );
+                          }
+                          return;
+                        }
                         final billing = _billing;
                         // Subscribers manage in the store (single plan —
                         // nothing to switch); everyone else subscribes.
