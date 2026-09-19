@@ -90,7 +90,7 @@ describe('fetch router', () => {
     const policyText = await policy.text();
     expect(policyText).toContain('Privacy Policy — Diagonal Reader');
     expect(policyText).toContain('not stored on our servers');
-    expect(policyText).toContain('privacy@diagonalreader.com');
+    expect(policyText).toContain('sklyarovaleksandar@gmail.com');
 
     const landing = await worker.fetch(
       new Request('https://diagonalreader.com/'),

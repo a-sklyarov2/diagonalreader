@@ -4,7 +4,7 @@
  * GET /              → minimal landing page.
  */
 
-export const CONTACT_EMAIL = 'privacy@diagonalreader.com';
+export const CONTACT_EMAIL = 'sklyarovaleksandar@gmail.com';
 export const EFFECTIVE_DATE = '19 September 2026';
 
 export const privacyPolicyHtml = `<!doctype html>
