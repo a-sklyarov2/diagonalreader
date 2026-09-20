@@ -73,17 +73,24 @@ export class CameraView {
 
   private async initCamera(): Promise<void> {
     try {
-      // Bare `{ facingMode }` lets the browser pick the cheapest
-      // stream (often 640x480) — stretched fullscreen, page text is
-      // unreadable. `ideal` (never `exact`) asks for 1080p without
-      // rejecting devices that can't do it. Capture is unaffected:
-      // `takePhoto()` already grabs full sensor resolution.
+      // Portrait-first: pages are framed upright, so ask for a
+      // portrait stream. A landscape stream in a portrait viewport
+      // forces `object-fit: cover` to throw away most of the frame
+      // (the crop mismatch you're seeing). `ideal` (never `exact`)
+      // keeps older devices working at their own max.
+      const portrait = window.innerHeight >= window.innerWidth;
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+        video: portrait
+          ? {
+              facingMode: 'environment',
+              width: { ideal: 1080 },
+              height: { ideal: 1920 },
+            }
+          : {
+              facingMode: 'environment',
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
       });
       if (this.destroyed) {
         for (const t of stream.getTracks()) t.stop();
@@ -197,18 +204,35 @@ export class CameraView {
       ).ImageCapture;
       if (typeof capture !== 'undefined' && track) {
         try {
-          return await new capture(track).takePhoto();
+          const photo = await new capture(track).takePhoto();
+          // takePhoto() returns the full sensor frame, which is wider
+          // than the `object-fit: cover` preview — crop the photo to
+          // exactly what was on screen so framing is WYSIWYG.
+          return await this.cropToVisible(photo);
         } catch {
           // Fall through to canvas grab.
         }
       }
-      const w = this.video.videoWidth;
-      const h = this.video.videoHeight;
-      if (w > 0 && h > 0) {
-        const canvas = new OffscreenCanvas(w, h);
+      // Canvas grab is already WYSIWYG: videoWidth/Height is the full
+      // decoded frame, so crop it to the displayed cover rect too.
+      const vw = this.video.videoWidth;
+      const vh = this.video.videoHeight;
+      if (vw > 0 && vh > 0) {
+        const rect = this.visibleRect(vw, vh);
+        const canvas = new OffscreenCanvas(rect.sw, rect.sh);
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(this.video, 0, 0, w, h);
+          ctx.drawImage(
+            this.video,
+            rect.sx,
+            rect.sy,
+            rect.sw,
+            rect.sh,
+            0,
+            0,
+            rect.sw,
+            rect.sh,
+          );
           const blob = await canvas.convertToBlob({
             type: 'image/jpeg',
             quality: 0.92,
@@ -220,6 +244,73 @@ export class CameraView {
     }
     if (this.deps.fetchFixture) return this.deps.fetchFixture();
     throw new Error('No picture returned');
+  }
+
+  /**
+   * The `object-fit: cover` rect actually shown on screen, in source
+   * pixels: scale the frame to fill the element box, then center-crop
+   * the overflow. Same math the browser uses to render the preview.
+   */
+  private visibleRect(
+    frameW: number,
+    frameH: number,
+  ): { sx: number; sy: number; sw: number; sh: number } {
+    const el = this.video;
+    const boxW = el?.clientWidth ?? frameW;
+    const boxH = el?.clientHeight ?? frameH;
+    const scale = Math.max(boxW / frameW, boxH / frameH);
+    const shownW = boxW / scale;
+    const shownH = boxH / scale;
+    const sx = Math.max(0, Math.round((frameW - shownW) / 2));
+    const sy = Math.max(0, Math.round((frameH - shownH) / 2));
+    return {
+      sx,
+      sy,
+      sw: Math.min(frameW - sx, Math.round(shownW)),
+      sh: Math.min(frameH - sy, Math.round(shownH)),
+    };
+  }
+
+  private async cropToVisible(photo: Blob): Promise<Blob> {
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(photo, {
+        imageOrientation: 'from-image',
+      });
+    } catch {
+      return photo;
+    }
+    try {
+      const rect = this.visibleRect(bitmap.width, bitmap.height);
+      // Photo and preview aspect already match (e.g. fixture shots)
+      // — skip the crop instead of shaving rounding pixels.
+      if (
+        rect.sx === 0 &&
+        rect.sy === 0 &&
+        rect.sw === bitmap.width &&
+        rect.sh === bitmap.height
+      ) {
+        return photo;
+      }
+      const canvas = new OffscreenCanvas(rect.sw, rect.sh);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return photo;
+      ctx.drawImage(
+        bitmap,
+        rect.sx,
+        rect.sy,
+        rect.sw,
+        rect.sh,
+        0,
+        0,
+        rect.sw,
+        rect.sh,
+      );
+      const cropped = await canvas.convertToBlob({ type: 'image/jpeg' });
+      return cropped ?? photo;
+    } finally {
+      bitmap.close();
+    }
   }
 
   private async capture(): Promise<void> {
