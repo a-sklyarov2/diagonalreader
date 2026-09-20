@@ -11,7 +11,6 @@ import {
 
 const env: Env = {
   OPENROUTER_KEY: 'or-test-key',
-  PROXY_TOKEN: 'proxy-test-token',
 };
 
 const sseBody =
@@ -35,7 +34,6 @@ function formRequest(fields: {
   }
   return new Request('https://api.test/summarize', {
     method: 'POST',
-    headers: { Authorization: 'Bearer proxy-test-token' },
     body: form,
   });
 }
@@ -69,7 +67,8 @@ describe('levels + prompt', () => {
 describe('fetch router', () => {
   beforeEach(() => vi.unstubAllGlobals());
 
-  it('GET /health reports the model', async () => {    const res = await worker.fetch(
+  it('GET /health reports the model', async () => {
+    const res = await worker.fetch(
       new Request('https://api.test/health'),
       env,
     );
@@ -111,12 +110,21 @@ describe('fetch router', () => {
     expect(text).toContain('sklyarovaleksandar@gmail.com');
   });
 
-  it('rejects missing/bad auth', async () => {
-    const noAuth = await worker.fetch(
-      new Request('https://api.test/summarize', { method: 'POST' }),
+  it('summarizes without any auth header', async () => {
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(sseBody, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+    );
+    const res = await worker.fetch(
+      formRequest({ level: 'high', image: new Uint8Array([1, 2, 3]) }),
       env,
     );
-    expect(noAuth.status).toBe(401);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
   });
 
   it('validates level + image', async () => {

@@ -7,7 +7,7 @@
  *
  * State (Cloudflare D1):
  *   subscriptions(user_id, product_id, expires_at) — maintained from
- *     RevenueCat webhooks; access is live while expires_at > now.
+ *     Stripe webhooks; access is live while expires_at > now.
  *   usage(user_id, month, day, free_used, paid_used) — one row per
  *     user per day; monthly windows fall out naturally.
  *
@@ -35,7 +35,7 @@ export interface QuotaView {
    * (free remainder, or remaining paid cap when subscribed).
    */
   paidBalance: number;
-  /** Server never sets this (entitlement lives in RevenueCat). */
+  /** Legacy compat: always false; live access is `unlimited`. */
   pro: false;
   /** True while a subscription is live (expires_at > now). */
   unlimited: boolean;

@@ -5,34 +5,61 @@ style-preserving summary in the page's own language → next page.
 History scrolls vertically, TikTok-style; red bin deletes summaries.
 
 Compression toggle: Low / High / Max. Model: `google/gemini-3.5-flash-lite`.
+PWA at `https://app.diagonalreader.com`; same Worker serves the app
+shell and the API (same-origin, no CORS).
 
 ## Architecture
-- **App** (`lib/`): camera → downscale (1600px/q75) → `POST` JPEG to our
-  Cloudflare Worker → streams SSE summary. The app never sees the
-  OpenRouter key (only a revocable proxy token, `--dart-define`).
-- **Server** (`server/`, `diagonal-api` worker): validates auth/level/
-  image, builds the prompt, calls OpenRouter with the secret key,
-  streams SSE back. `GET /health` for status.
+- **PWA** (`pwa/`, vanilla TS + Vite): camera → downscale (1600px/q75)
+  → same-origin `POST /summarize` → streams SSE summary. Anonymous
+  `uuid:` identity in `localStorage` (no login). Photos stay on-device
+  (IndexedDB); checkout/portal are server-created URL redirects.
+- **Server** (`server/`, `diagonal-api` worker): spends quota
+  (100 free/month; subscribers 500/day + 10k/month guardrails), builds
+  the prompt, calls OpenRouter with the secret key, streams SSE back.
+  `GET /health` for status; `POST /stripe/checkout|portal`,
+  `GET /stripe/status`, `POST /stripe/webhook` for billing.
 
-## App dev (no secrets in repo — `--dart-define` only)
+## PWA dev
 ```sh
-flutter test                                       # mocked, no spend
-xvfb-run -a flutter test integration_test -d linux \
-  --dart-define=DIAGONAL_API=http://127.0.0.1:18080 \
-  --dart-define=PROXY_TOKEN=test                   # E2E via proxy path
-OPENROUTER_KEY=sk-or-... dart run tool/live_check.dart high  # direct, cents
-flutter build apk --release \
-  --dart-define=DIAGONAL_API=https://diagonal-api.sasho-alex-sk.workers.dev \
-  --dart-define=PROXY_TOKEN=$PROXY_TOKEN
+cd pwa && npm install && npm run dev   # http://127.0.0.1:5173, proxies /quota /summarize /stripe → :8787
 ```
 
-## Server dev
+## Worker dev
 ```sh
-cd server && npm install
-npm test && npm run typecheck
-printf 'OPENROUTER_KEY=%s\nPROXY_TOKEN=%s\n' "$OR_KEY" "$PROXY" > .dev.vars  # gitignored
-npm run dev                        # local http://127.0.0.1:8787
-CLOUDFLARE_API_TOKEN=... npm run deploy
+cd server && npm install && npm test && npm run typecheck
+printf 'OPENROUTER_KEY=%s\nSTRIPE_SECRET_KEY=%s\nSTRIPE_WEBHOOK_SECRET=%s\nSTRIPE_PRICE_MONTHLY=%s\n' \
+  "$OR_KEY" "$SK" "$WHSEC" "$PRICE" > .dev.vars  # gitignored, never commit
+npx wrangler dev                       # local http://127.0.0.1:8787
+npx wrangler d1 migrations apply diagonal --local   # after pulling migrations
+```
+
+End-to-end (real model, real spend): `npx wrangler dev` (server dir),
+`npm run dev` (pwa dir), open the PWA, tap "Use sample page photo"
+(`pwa/e2e-fixtures/page1.jpg`, also shipped at
+`public/e2e-fixtures/page1.jpg` for the built bundle).
+
+## Deploy
+```sh
+cd pwa && npm run build                # → pwa/dist, consumed by the Worker
+cd ../server && npm test && npm run typecheck && npx wrangler deploy
+npx wrangler d1 migrations apply diagonal --remote
 printf '%s' "$OR_KEY" | npx wrangler secret put OPENROUTER_KEY
-printf '%s' "$PROXY" | npx wrangler secret put PROXY_TOKEN
+printf '%s' "$SK" | npx wrangler secret put STRIPE_SECRET_KEY
+printf '%s' "$WHSEC" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
+# STRIPE_PRICE_MONTHLY lives in wrangler.toml [vars] (price ids are not secret)
 ```
+
+## Stripe setup (~10 min, dashboard/CLI in your browser)
+1. Create product `Diagonal Unlimited`, one monthly recurring price
+   (e.g. €4.99); copy the `price_…` id into `STRIPE_PRICE_MONTHLY`.
+2. Webhook endpoint `https://api.diagonalreader.com/stripe/webhook`
+   with events `checkout.session.completed`,
+   `customer.subscription.updated`, `customer.subscription.deleted`,
+   `invoice.payment_failed`; copy the `whsec_…` signing secret.
+3. `sk_live_…` secret (or restricted key with
+   `checkout.sessions:write`, `billing_portal.sessions:write`,
+   `subscriptions:read`); paste all three only via
+   `wrangler secret put`, never chat/email.
+4. Local webhook test: `stripe listen --forward-to
+   127.0.0.1:8787/stripe/webhook` while deploying with test-mode keys.
+   No publishable key needed (no Stripe.js; redirect-to-URL flow).

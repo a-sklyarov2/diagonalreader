@@ -1,23 +1,4 @@
-# env
-.env
-
-# Android upload-key signing — loss = support ticket, never commit
-android/key.properties
-key.properties
-*.jks
-*.keystore
-
-# Flutter/Dart
-.dart_tool/
-.build/
-build/
-*.freezed.dart
-*.g.dart
-android/.gradle/
-ios/Pods/
-linux/flutter/ephemeral/
-
-# Server (Cloudflare Worker) — secrets + tooling, never commit
-server/node_modules/
-server/.dev.vars
-server/.wrangler/
+node_modules/
+dist/
+.wrangler/
+.dev.vars

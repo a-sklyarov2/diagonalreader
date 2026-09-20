@@ -1,0 +1,91 @@
+/** App shell: camera ⇄ reader, Stripe return toasts, PWA wiring. */
+
+import { ApiError } from './api';
+import { Billing } from './billing';
+import { CameraView } from './camera';
+import { getUserId } from './identity';
+import { ReadingSession } from './session';
+import { ReaderView } from './reader';
+import { snackbar } from './ui';
+import './styles.css';
+
+const FIXTURE_URL = 'e2e-fixtures/page1.jpg';
+
+function toastForCheckout(params: URLSearchParams): string | null {
+  const result = params.get('checkout');
+  if (result === 'success') return 'Subscription active — happy reading.';
+  if (result === 'cancelled') return 'Checkout cancelled.';
+  return null;
+}
+
+async function boot(): Promise<void> {
+  const app = document.querySelector<HTMLElement>('#app');
+  if (!app) throw new Error('missing #app');
+
+  const userId = getUserId();
+  const session = new ReadingSession(userId);
+  const billing = new Billing(userId);
+  await session.restore();
+
+  const params = new URLSearchParams(window.location.search);
+  const toast = toastForCheckout(params);
+  if (toast) {
+    snackbar(toast);
+    params.delete('checkout');
+    const clean =
+      params.size > 0
+        ? `${window.location.pathname}?${params}`
+        : window.location.pathname;
+    window.history.replaceState(null, '', clean);
+  }
+
+  let camera: CameraView | null = null;
+  let reader: ReaderView | null = null;
+
+  const showCamera = (): void => {
+    reader?.destroy();
+    reader = null;
+    camera?.destroy();
+    camera = new CameraView(
+      app,
+      session,
+      billing,
+      (_page, index) => showReader(index),
+      {
+        fetchFixture: async () => {
+          const res = await fetch(FIXTURE_URL);
+          if (!res.ok) throw new ApiError(res.status, 'fixture missing');
+          return res.blob();
+        },
+      },
+    );
+    camera.mount();
+    void billing.refreshQuota();
+  };
+
+  const showReader = (index: number): void => {
+    if (session.pages.length === 0) {
+      showCamera();
+      return;
+    }
+    camera?.destroy();
+    camera = null;
+    reader?.destroy();
+    reader = new ReaderView(
+      app,
+      session,
+      billing,
+      index,
+      () => showCamera(),
+      () => showCamera(),
+    );
+    reader.mount();
+  };
+
+  showCamera();
+}
+
+void boot().catch((e: unknown) => {
+  const msg = e instanceof Error ? e.message : `${e}`;
+  document.querySelector('#app')?.append(`Boot failed: ${msg}`);
+});

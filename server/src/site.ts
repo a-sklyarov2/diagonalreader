@@ -1,11 +1,12 @@
 /**
  * Static site served by the worker on the apex domain:
- * GET /privacy-policy → the Play-listing privacy policy.
- * GET /              → minimal landing page.
+ * GET /privacy-policy → the store-listing privacy policy.
+ * GET /data-deletion → how to delete data (no accounts).
+ * GET /              → minimal landing page (PWA lives on app.*).
  */
 
 export const CONTACT_EMAIL = 'sklyarovaleksandar@gmail.com';
-export const EFFECTIVE_DATE = '19 September 2026';
+export const EFFECTIVE_DATE = '20 September 2026';
 
 export const privacyPolicyHtml = `<!doctype html>
 <html lang="en">
@@ -25,7 +26,9 @@ h1{font-size:1.6rem}h2{font-size:1.15rem;margin-top:2rem}
 <p>Diagonal Reader ("the app") helps you read faster by photographing
 book pages and returning style-preserving summaries. This policy
 explains what data the app and its backend process. There are
-<strong>no accounts and no sign-in</strong>: the app works anonymously.</p>
+<strong>no accounts and no sign-in</strong>: the app works anonymously
+with a random browser identifier stored in your device's
+localStorage.</p>
 
 <h2>Data we process</h2>
 <ul>
@@ -33,15 +36,20 @@ explains what data the app and its backend process. There are
 sent to our backend and forwarded to our AI provider (OpenRouter,
 running a Google model) solely to generate your summary. Page images
 are <strong>not stored on our servers</strong>; they are kept only in
-the on-device history on your phone until you delete them.</li>
-<li><strong>Anonymous device identifier.</strong> The app generates a
-random identifier from your device (Android ID) to count your monthly
-page allowance and recognise an active subscription. It contains no
-name, email, or contact details.</li>
+the on-device history in your browser (IndexedDB) until you delete them.</li>
+<li><strong>Anonymous browser identifier.</strong> The app generates a
+random identifier (a <code>uuid:</code> value in localStorage) to count
+your monthly page allowance and recognise an active subscription. It
+contains no name, email, or contact details. Clearing site data
+resets it.</li>
 <li><strong>Purchase information.</strong> Subscriptions are sold and
-billed by Google Play and managed through RevenueCat. We receive only
-the fact that a subscription is active (plus product and expiry
-timestamps) — never your payment details.</li>
+billed by Stripe. We receive only the fact that a subscription is
+active (plus price and expiry timestamps) — never your payment
+details.</li>
+<li><strong>Page counters.</strong> Monthly and daily counters linked to
+your anonymous identifier are stored in our Cloudflare D1 database to
+enforce the 100-pages/month free allowance and the subscriber
+guardrails (500/day, 10000/month).</li>
 </ul>
 
 <h2>What we do not collect</h2>
@@ -52,17 +60,15 @@ the shutter; no photos are taken in the background.</p>
 <h2>Third parties</h2>
 <ul>
 <li>OpenRouter (AI summarisation) — receives page photos transiently.</li>
-<li>RevenueCat (subscription status) — receives the anonymous device
-identifier and purchase events.</li>
-<li>Google Play (billing) — processes payments under Google's own
+<li>Stripe (payments) — processes subscriptions under Stripe's own
 privacy policy.</li>
-<li>Cloudflare (hosting) — runs the backend that relays summaries and
-counts pages.</li>
+<li>Cloudflare (hosting) — serves the app and runs the backend that
+relays summaries and counts pages.</li>
 </ul>
 
 <h2>Retention</h2>
 <p>Page photos and summaries live only on your device and disappear
-when you delete them or uninstall the app. Server-side page counters
+when you delete them or clear site data. Server-side page counters
 reset every calendar month. Subscription records are kept while a
 subscription is active (plus its paid period) and removed on
 expiry.</p>
@@ -73,7 +79,7 @@ children under 13. No children's data is knowingly collected.</p>
 
 <h2>Your rights</h2>
 <p>Depending on where you live (e.g. GDPR, CCPA) you may request
-access, correction, or deletion of data linked to your device
+access, correction, or deletion of data linked to your browser
 identifier. See <a href="/data-deletion">data deletion</a> for the
 one-minute process: your on-device history deletes instantly in the
 app, and server records go on emailed request. Contact:
@@ -105,14 +111,14 @@ code{background:#f0f0f0;padding:.1rem .35rem;border-radius:4px}
 <h1>Data deletion — Diagonal Reader</h1>
 <p>There are no accounts, so there is nothing to log into. Deleting
 your data takes two short steps:</p>
-<h2>1. On your phone (instant)</h2>
+<h2>1. On your device (instant)</h2>
 <p>Open the app and tap the red bin on any summary to delete that
-page's photo and text immediately. Uninstalling the app removes
-whatever remains.</p>
+page's photo and text immediately. Clearing the site's data removes
+whatever remains, including your anonymous browser identifier.</p>
 <h2>2. On our servers (by email)</h2>
 <p>Email <a href="mailto:${CONTACT_EMAIL}?subject=Data%20deletion">${CONTACT_EMAIL}</a>
 with subject <code>Data deletion</code> and include your
-<strong>Device ID</strong> so we can find your records: in the app,
+<strong>User ID</strong> so we can find your records: in the app,
 <strong>long-press the page counter</strong> at the top of the camera
 screen, then Copy. We delete your monthly counters and any
 subscription record and confirm back within 30 days.</p>
@@ -139,7 +145,7 @@ footer{margin-top:4rem;font-size:.85rem;color:#666}
 <p>Photograph a book page. Get back a summary in the author's own
 style — in seconds. 100 pages free every month, unlimited with one
 subscription.</p>
-<a class="btn" href="https://play.google.com/store/apps/details?id=com.diagonalreader.app">Get it on Google Play</a>
+<a class="btn" href="https://app.diagonalreader.com">Open the app</a>
 <footer><a href="/privacy-policy">Privacy Policy</a></footer>
 </body>
 </html>`;

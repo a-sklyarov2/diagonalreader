@@ -13,11 +13,12 @@ import {
 
 export interface Env {
   OPENROUTER_KEY: string;
-  PROXY_TOKEN: string;
   MODEL?: string;
   OPENROUTER_BASE?: string;
   FREE_PAGES?: string;
-  RC_WEBHOOK_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PRICE_MONTHLY?: string;
   /** D1 quota database. Unbound (unit tests, bare dev) → metering
    *  is skipped and every request is allowed. */
   DB?: D1Db;
@@ -76,17 +77,6 @@ export async function summarize(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  if (!env.PROXY_TOKEN) {
-    return Response.json(
-      { error: 'server misconfigured: missing PROXY_TOKEN' },
-      { status: 500 },
-    );
-  }
-  if (
-    request.headers.get('Authorization') !== `Bearer ${env.PROXY_TOKEN}`
-  ) {
-    return Response.json({ error: 'unauthorized' }, { status: 401 });
-  }
   if (!env.OPENROUTER_KEY) {
     return Response.json(
       { error: 'server misconfigured: missing OPENROUTER_KEY' },

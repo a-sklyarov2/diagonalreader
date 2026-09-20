@@ -1,0 +1,495 @@
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --fg: #fff;
+  --dim: rgba(255, 255, 255, 0.7);
+  --faint: rgba(255, 255, 255, 0.54);
+  --pill: rgba(0, 0, 0, 0.6);
+  --accent: #4dd0e1;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  height: 100dvh;
+  background: #000;
+}
+
+/* ---------- camera ---------- */
+
+.camera {
+  position: relative;
+  height: 100dvh;
+  background: #000;
+  overflow: hidden;
+}
+
+.camera-video,
+.camera-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.camera-fallback {
+  background: #212121;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--faint);
+}
+
+.camera-fallback .book-icon {
+  font-size: 64px;
+  line-height: 1;
+}
+
+.camera-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: #fff;
+}
+
+.camera-title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding-top: env(safe-area-inset-top);
+  text-align: center;
+  color: #fff;
+  letter-spacing: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.quota-pill {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quota-pill .gear {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.camera-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 24px 16px calc(32px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.87));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  padding: 6px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.segmented button[aria-pressed='true'] {
+  background: #fff;
+  color: #000;
+}
+
+.shutter {
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  border: 4px solid #fff;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.shutter:disabled {
+  cursor: default;
+}
+
+.shutter-inner {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.shutter.capturing {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.shutter .spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.demo-btn {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ---------- reader ---------- */
+
+.reader {
+  position: relative;
+  height: 100dvh;
+  background: #000;
+}
+
+.reader-pages {
+  height: 100dvh;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+}
+
+.reader-page {
+  position: relative;
+  height: 100dvh;
+  scroll-snap-align: start;
+  overflow: hidden;
+}
+
+.reader-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.5s;
+}
+
+.reader-photo.blurred {
+  filter: blur(22px);
+  transform: scale(1.05);
+}
+
+.reader-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.reader-body {
+  position: absolute;
+  inset: 0;
+  padding: calc(64px + env(safe-area-inset-top)) 24px
+    calc(96px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+.level-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 12px;
+  font-size: 12px;
+  color: #fff;
+  margin-bottom: 12px;
+}
+
+.summary-text {
+  color: #fff;
+  font-size: 21px;
+  line-height: 1.55;
+  text-shadow:
+    0 1px 8px rgba(0, 0, 0, 0.87),
+    0 0 2px rgba(0, 0, 0, 0.9);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.summary-text .cursor::after {
+  content: '▍';
+}
+
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.scan-overlay::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -30%;
+  height: 30%;
+  background: linear-gradient(
+    transparent,
+    rgba(77, 208, 225, 0.45),
+    transparent
+  );
+  animation: scan 1.6s ease-in-out infinite;
+}
+
+@keyframes scan {
+  0% {
+    top: -30%;
+  }
+  100% {
+    top: 110%;
+  }
+}
+
+.reader-error {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  color: #fff;
+}
+
+.reader-error .cloud {
+  font-size: 48px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.reader-error .retry {
+  background: #fff;
+  color: #000;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 28px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.reader-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: calc(8px + env(safe-area-inset-top)) 8px 8px;
+  display: flex;
+  align-items: center;
+  z-index: 2;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 22px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.icon-btn.danger {
+  color: #ff5252;
+}
+
+.page-counter {
+  margin: 0 auto;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 16px;
+  color: #fff;
+  font-size: 14px;
+}
+
+.reader-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 2;
+}
+
+.next-btn {
+  background: #fff;
+  color: #000;
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 28px;
+  font-size: 17px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resum-menu {
+  position: relative;
+}
+
+.resum-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: #1c1c1c;
+  border-radius: 12px;
+  overflow: hidden;
+  display: none;
+  min-width: 120px;
+}
+
+.resum-pop.open {
+  display: block;
+}
+
+.resum-pop button {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.resum-pop button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- dialog + snackbar ---------- */
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 24px;
+}
+
+.dialog {
+  background: #1c1c1c;
+  color: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.dialog h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.dialog-line {
+  margin: 0 0 8px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dialog-btn {
+  background: transparent;
+  border: 0;
+  color: #4dd0e1;
+  font-size: 15px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.snackbar {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  background: #323232;
+  color: #fff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  z-index: 60;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  pointer-events: none;
+}
+
+.snackbar.show {
+  opacity: 1;
+  transform: none;
+}

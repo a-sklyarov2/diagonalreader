@@ -12,10 +12,20 @@ account_id = "3a3c78db80d271226caeb10f8ba124e8"
 routes = [
   { pattern = "diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
   { pattern = "api.diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
+  { pattern = "app.diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
 ]
 
 [vars]
 MODEL = "google/gemini-3.5-flash-lite"
+STRIPE_PRICE_MONTHLY = "price_REPLACE_ME"
+
+# PWA shell + API on one Worker (same-origin, no CORS): static assets
+# are served first, API paths fall through to src/index.ts, unknown
+# navigation falls back to index.html.
+[assets]
+directory = "../pwa/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/summarize", "/quota", "/stripe/*", "/health"]
 
 # Page-quota database. database_id comes from `wrangler d1 create
 # diagonal` (run once); migrations/ is applied with

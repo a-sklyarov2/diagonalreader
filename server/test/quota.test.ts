@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 import worker from '../src/index';
 import {
@@ -12,10 +13,11 @@ import {
 } from '../src/quota';
 import type { Env } from '../src/summarize';
 
-/** In-memory D1 covering the statements quota.ts / webhook.ts issue. */
+/** In-memory D1 covering the statements quota.ts / stripe.ts issue. */
 function makeFakeDb() {
   const subs = new Map<string, { product_id: string; expires_at: number }>();
   const usage = new Map<string, { free_used: number; paid_used: number }>();
+  const customers = new Map<string, string>();
   const key = (u: string, m: string, d: string) => `${u}|${m}|${d}`;
   const db: D1Db = {
     prepare(query: string): D1Statement {
@@ -49,6 +51,21 @@ function makeFakeDb() {
             );
             return (row ? { paid_used: row.paid_used } : null) as T | null;
           }
+          if (q.startsWith('SELECT customer_id FROM stripe_customers')) {
+            const customerId = customers.get(bound[0] as string);
+            return (
+              customerId ? { customer_id: customerId } : null
+            ) as T | null;
+          }
+          if (q.startsWith('SELECT user_id FROM stripe_customers')) {
+            const wanted = bound[0] as string;
+            for (const [userId, customerId] of customers) {
+              if (customerId === wanted) {
+                return { user_id: userId } as T;
+              }
+            }
+            return null as T | null;
+          }
           throw new Error(`fake D1: unexpected SELECT: ${q}`);
         },
         async run() {
@@ -59,8 +76,17 @@ function makeFakeDb() {
             });
             return {};
           }
+          if (q.startsWith('UPDATE subscriptions SET expires_at')) {
+            const row = subs.get(bound[1] as string);
+            if (row) row.expires_at = bound[0] as number;
+            return {};
+          }
           if (q.startsWith('DELETE FROM subscriptions')) {
             subs.delete(bound[0] as string);
+            return {};
+          }
+          if (q.startsWith('INSERT INTO stripe_customers')) {
+            customers.set(bound[0] as string, bound[1] as string);
             return {};
           }
           if (q.startsWith('INSERT INTO usage')) {
@@ -92,13 +118,18 @@ function makeFakeDb() {
       return stmt;
     },
   };
-  return { db };
+  return { db, subs, customers };
 }
+
+const STRIPE_SECRET = 'sk-test';
+const WEBHOOK_SECRET = 'whsec-test';
+const PRICE = 'price_monthly';
 
 const baseEnv: Env = {
   OPENROUTER_KEY: 'or-test-key',
-  PROXY_TOKEN: 'proxy-test-token',
-  RC_WEBHOOK_SECRET: 'rc-test-secret',
+  STRIPE_SECRET_KEY: STRIPE_SECRET,
+  STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  STRIPE_PRICE_MONTHLY: PRICE,
 };
 
 const sept = new Date('2026-09-15T12:00:00Z');
@@ -113,9 +144,7 @@ function summarizeRequest(userId?: string): Request {
       type: 'image/jpeg',
     }),
   );
-  const headers: Record<string, string> = {
-    Authorization: 'Bearer proxy-test-token',
-  };
+  const headers: Record<string, string> = {};
   if (userId !== undefined) headers['X-User-Id'] = userId;
   return new Request('https://api.test/summarize', {
     method: 'POST',
@@ -124,20 +153,42 @@ function summarizeRequest(userId?: string): Request {
   });
 }
 
-function rcEvent(type: string, userId: string, productId: string) {
-  return new Request('https://api.test/rc-webhook', {
+function sign(raw: string, secret: string, t: number): string {
+  return createHmac('sha256', secret).update(`${t}.${raw}`, 'utf8').digest('hex');
+}
+
+function stripeWebhookRequest(
+  payload: unknown,
+  opts?: { secret?: string; t?: number; raw?: string },
+): Request {
+  const raw =
+    opts?.raw ??
+    (typeof payload === 'string' ? payload : JSON.stringify(payload));
+  const t = opts?.t ?? Math.floor(Date.now() / 1000);
+  const v1 = sign(raw, opts?.secret ?? WEBHOOK_SECRET, t);
+  return new Request('https://api.test/stripe/webhook', {
     method: 'POST',
-    headers: { Authorization: 'Bearer rc-test-secret' },
-    body: JSON.stringify({
-      event: {
-        type,
-        id: `evt-${type}-${userId}`,
-        app_user_id: userId,
-        product_id: productId,
-        expiration_at_ms: Date.now() + 30 * 24 * 3600 * 1000,
-      },
-    }),
+    headers: { 'Stripe-Signature': `t=${t},v1=${v1}` },
+    body: raw,
   });
+}
+
+function subscriptionJson(overrides?: {
+  customer?: string;
+  periodEndSec?: number;
+  priceId?: string;
+  status?: string;
+}) {
+  return {
+    id: 'sub_123',
+    customer: overrides?.customer ?? 'cus_123',
+    current_period_end:
+      overrides?.periodEndSec ?? Math.floor(Date.now() / 1000) + 30 * 86400,
+    status: overrides?.status ?? 'active',
+    items: {
+      data: [{ price: { id: overrides?.priceId ?? PRICE } }],
+    },
+  };
 }
 
 describe('free monthly quota', () => {
@@ -196,7 +247,7 @@ describe('subscriber guardrails', () => {
     await activateSubscription(
       db,
       'sub1',
-      'pages_monthly:monthly-max',
+      PRICE,
       Date.now() + 30 * 24 * 3600 * 1000,
     );
     for (let i = 0; i < PAID_PAGES_PER_DAY; i++) {
@@ -222,7 +273,7 @@ describe('subscriber guardrails', () => {
     await activateSubscription(
       db,
       'whale',
-      'pages_monthly:monthly-max',
+      PRICE,
       Date.now() + 60 * 24 * 3600 * 1000,
     );
     // 20 days × 500/day.
@@ -247,7 +298,7 @@ describe('subscriber guardrails', () => {
     await activateSubscription(
       db,
       'ex',
-      'pages_monthly:monthly-max',
+      PRICE,
       sept.getTime() - 1000,
     );
     const q = await getQuota(db, 'ex', 100, sept);
@@ -256,15 +307,13 @@ describe('subscriber guardrails', () => {
   });
 });
 
-describe('GET /quota', () => {
+describe('GET /quota + /stripe/status', () => {
   it('reports the new shape + legacy compat', async () => {
     const { db } = makeFakeDb();
     const env = { ...baseEnv, DB: db };
     await consumePage(db, 'u1', 100, sept);
     const res = await worker.fetch(
-      new Request('https://api.test/quota?user=u1', {
-        headers: { Authorization: 'Bearer proxy-test-token' },
-      }),
+      new Request('https://api.test/quota?user=u1'),
       env,
     );
     expect(res.status).toBe(200);
@@ -279,86 +328,266 @@ describe('GET /quota', () => {
     expect(body.dailyCap).toBe(PAID_PAGES_PER_DAY);
     expect(body.month).toBe('2026-09');
   });
-});
 
-describe('POST /rc-webhook (subscription access)', () => {
-  it('activates unlimited on purchase, keeps it on cancel, drops on expiry', async () => {
+  it('stripe status mirrors quota', async () => {
     const { db } = makeFakeDb();
     const env = { ...baseEnv, DB: db };
+    await consumePage(db, 'u9', 100, sept);
+    const res = await worker.fetch(
+      new Request('https://api.test/stripe/status?user=u9'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.freeUsed).toBe(1);
+    expect(body.unlimited).toBe(false);
+  });
+});
+
+describe('POST /stripe/checkout + /stripe/portal', () => {
+  it('creates a checkout session and maps Stripe errors to 502', async () => {
+    const { db } = makeFakeDb();
+    const env = { ...baseEnv, DB: db };
+    let seenBody = '';
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      if (`${url}`.endsWith('/checkout/sessions')) {
+        seenBody = `${init.body ?? ''}`;
+        return new Response(
+          JSON.stringify({ url: 'https://checkout.stripe.com/c/pay_123' }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
+    const res = await worker.fetch(
+      new Request('https://api.test/stripe/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'u-checkout' }),
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      url: 'https://checkout.stripe.com/c/pay_123',
+    });
+    expect(seenBody).toContain(PRICE);
+    expect(seenBody).toContain('u-checkout');
+
+    const missing = await worker.fetch(
+      new Request('https://api.test/stripe/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ userId: '' }),
+      }),
+      env,
+    );
+    expect(missing.status).toBe(400);
+
+    vi.stubGlobal(
+      'fetch',
+      async () => new Response('card declined', { status: 402 }),
+    );
+    const failed = await worker.fetch(
+      new Request('https://api.test/stripe/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'u-checkout' }),
+      }),
+      env,
+    );
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toEqual({
+      error: 'stripe 402: card declined',
+    });
+  });
+
+  it('opens the portal for known customers, 404 otherwise', async () => {
+    const { db, customers } = makeFakeDb();
+    customers.set('u-portal', 'cus_portal');
+    const env = { ...baseEnv, DB: db };
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (`${url}`.endsWith('/billing_portal/sessions')) {
+        return new Response(
+          JSON.stringify({ url: 'https://billing.stripe.com/p/sess_1' }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
+    const res = await worker.fetch(
+      new Request('https://api.test/stripe/portal', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'u-portal' }),
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      url: 'https://billing.stripe.com/p/sess_1',
+    });
+
+    const unknown = await worker.fetch(
+      new Request('https://api.test/stripe/portal', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'nobody' }),
+      }),
+      env,
+    );
+    expect(unknown.status).toBe(404);
+  });
+});
+
+describe('POST /stripe/webhook (subscription access)', () => {
+  it('activates unlimited on checkout, keeps paid time on cancel/failure, drops on delete', async () => {
+    const { db, customers } = makeFakeDb();
+    const env = { ...baseEnv, DB: db };
+    const sub = subscriptionJson();
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (`${url}`.endsWith('/subscriptions/sub_123')) {
+        return new Response(JSON.stringify(sub), { status: 200 });
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
 
     const buy = await worker.fetch(
-      rcEvent('INITIAL_PURCHASE', 'u1', 'pages_monthly:monthly-max'),
+      stripeWebhookRequest({
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_123',
+            client_reference_id: 'u1',
+            metadata: { userId: 'u1' },
+            subscription: 'sub_123',
+            customer: 'cus_123',
+          },
+        },
+      }),
       env,
     );
     expect(buy.status).toBe(200);
-    const bought = (await buy.json()) as Record<string, unknown>;
-    expect(bought.unlimited).toBe(true);
-    expect(bought.product).toBe('pages_monthly:monthly-max');
+    expect(await buy.json()).toEqual({ received: true });
     expect((await getQuota(db, 'u1', 100, sept)).unlimited).toBe(true);
+    expect(customers.get('u1')).toBe('cus_123');
 
-    const cancel = await worker.fetch(
-      rcEvent('CANCELLATION', 'u1', 'pages_monthly:monthly-max'),
+    const failedInvoice = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'invoice.payment_failed',
+        data: { object: { customer: 'cus_123' } },
+      }),
       env,
     );
-    expect(cancel.status).toBe(200);
+    expect(failedInvoice.status).toBe(200);
     expect((await getQuota(db, 'u1', 100, sept)).unlimited).toBe(true);
 
-    const expired = await worker.fetch(
-      rcEvent('EXPIRATION', 'u1', 'pages_monthly:monthly-max'),
+    const canceled = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'customer.subscription.updated',
+        data: { object: { ...sub, status: 'canceled' } },
+      }),
       env,
     );
-    expect(expired.status).toBe(200);
-    expect(await expired.json()).toEqual({ expired: true, user: 'u1' });
+    expect(canceled.status).toBe(200);
+    // Paid period still runs — access remains until period end.
+    expect((await getQuota(db, 'u1', 100, sept)).unlimited).toBe(true);
+
+    const deleted = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'customer.subscription.deleted',
+        data: { object: { customer: 'cus_123' } },
+      }),
+      env,
+    );
+    expect(deleted.status).toBe(200);
     expect((await getQuota(db, 'u1', 100, sept)).unlimited).toBe(false);
   });
 
-  it('legacy product ids also unlock', async () => {
+  it('ignores unknown events, rejects bad signatures and malformed bodies', async () => {
     const { db } = makeFakeDb();
     const env = { ...baseEnv, DB: db };
-    for (const product of [
-      'pagesMax_monthly',
-      'pagesMid_monthly',
-      'pagesLow_monthly',
-    ]) {
-      const res = await worker.fetch(
-        rcEvent('INITIAL_PURCHASE', `u-${product}`, product),
-        env,
-      );
-      expect(res.status).toBe(200);
-      expect(
-        (await getQuota(db, `u-${product}`, 100, sept)).unlimited,
-      ).toBe(true);
-    }
-  });
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('Stripe API must not be called');
+    });
 
-  it('rejects bad secret, unknown products, malformed bodies', async () => {
-    const { db } = makeFakeDb();
-    const env = { ...baseEnv, DB: db };
-
-    const badSecret = await worker.fetch(
-      new Request('https://api.test/rc-webhook', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer wrong' },
-        body: JSON.stringify({ event: {} }),
+    const ignored = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'customer.created',
+        data: { object: { id: 'cus_x' } },
       }),
       env,
     );
-    expect(badSecret.status).toBe(401);
+    expect(ignored.status).toBe(200);
+    expect(await ignored.json()).toEqual({ ignored: 'customer.created' });
 
-    const unknown = await worker.fetch(
-      rcEvent('INITIAL_PURCHASE', 'u1', 'pagesUltra_monthly'),
+    const badSig = await worker.fetch(
+      stripeWebhookRequest(
+        {
+          type: 'checkout.session.completed',
+          data: { object: {} },
+        },
+        { secret: 'wrong-secret' },
+      ),
       env,
     );
-    expect(unknown.status).toBe(400);
+    expect(badSig.status).toBe(401);
+
+    const stale = await worker.fetch(
+      stripeWebhookRequest(
+        {
+          type: 'checkout.session.completed',
+          data: { object: {} },
+        },
+        { t: Math.floor(Date.now() / 1000) - 3600 },
+      ),
+      env,
+    );
+    expect(stale.status).toBe(401);
 
     const empty = await worker.fetch(
-      new Request('https://api.test/rc-webhook', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer rc-test-secret' },
-        body: JSON.stringify({ event: {} }),
-      }),
+      stripeWebhookRequest({ event: {} }),
       env,
     );
     expect(empty.status).toBe(400);
+  });
+
+  it('resolves the user from metadata and pins past-due expiry', async () => {
+    const { db } = makeFakeDb();
+    const env = { ...baseEnv, DB: db };
+    const sub = subscriptionJson();
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (`${url}`.endsWith('/subscriptions/sub_123')) {
+        return new Response(JSON.stringify(sub), { status: 200 });
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
+    const buy = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_9',
+            metadata: { userId: 'u-meta' },
+            subscription: 'sub_123',
+            customer: 'cus_123',
+          },
+        },
+      }),
+      env,
+    );
+    expect(buy.status).toBe(200);
+    expect((await getQuota(db, 'u-meta', 100, sept)).unlimited).toBe(true);
+
+    const pastDue = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'customer.subscription.updated',
+        data: {
+          object: {
+            ...sub,
+            status: 'past_due',
+            current_period_end: Math.floor(sept.getTime() / 1000) - 10,
+          },
+        },
+      }),
+      env,
+    );
+    expect(pastDue.status).toBe(200);
+    expect((await getQuota(db, 'u-meta', 100, sept)).unlimited).toBe(false);
   });
 });
