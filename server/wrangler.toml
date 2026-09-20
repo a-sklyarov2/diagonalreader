@@ -17,7 +17,7 @@ routes = [
 
 [vars]
 MODEL = "google/gemini-3.5-flash-lite"
-STRIPE_PRICE_MONTHLY = "price_REPLACE_ME"
+STRIPE_PRICE_MONTHLY = "price_1UHspeLpGV9Non9OtQjzQ0II"
 
 # PWA shell + API on one Worker (same-origin, no CORS): static assets
 # are served first, API paths fall through to src/index.ts, unknown
