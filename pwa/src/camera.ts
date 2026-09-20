@@ -73,8 +73,17 @@ export class CameraView {
 
   private async initCamera(): Promise<void> {
     try {
+      // Bare `{ facingMode }` lets the browser pick the cheapest
+      // stream (often 640x480) — stretched fullscreen, page text is
+      // unreadable. `ideal` (never `exact`) asks for 1080p without
+      // rejecting devices that can't do it. Capture is unaffected:
+      // `takePhoto()` already grabs full sensor resolution.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
       });
       if (this.destroyed) {
         for (const t of stream.getTracks()) t.stop();
@@ -85,6 +94,9 @@ export class CameraView {
       }
       this.stream = stream;
       this.ready = true;
+      // Book pages need near-focus locked continuously; without this
+      // some phones sit at hyperfocal/infinity and text never sharpens.
+      void this.tuneFocus(stream.getVideoTracks()[0]);
     } catch (e) {
       this.ready = true;
       // No camera hardware (headless/desktop without webcam) is not
@@ -99,6 +111,37 @@ export class CameraView {
       this.cameraError = noDevice ? null : msg;
     }
     this.render();
+  }
+
+  private async tuneFocus(track: MediaStreamTrack): Promise<void> {
+    try {
+      const caps = track.getCapabilities?.() as
+        | (MediaTrackCapabilities & { focusMode?: string[] })
+        | undefined;
+      if (caps?.focusMode && !caps.focusMode.includes('continuous')) {
+        return;
+      }
+      // focusMode is a real device constraint but missing from this
+      // TS lib — spread through an extension record instead of
+      // widening the whole constraint type.
+      const ext: Record<string, string> = { focusMode: 'continuous' };
+      await track.applyConstraints({ advanced: [ext] });
+    } catch {
+      // Unsupported on this device/browser — preview still works,
+      // just with the default focus behavior.
+    }
+  }
+
+  /** Single-shot refocus where the user tapped (point of interest). */
+  private async focusAt(track: MediaStreamTrack): Promise<void> {
+    try {
+      const single: Record<string, string> = { focusMode: 'single-shot' };
+      const cont: Record<string, string> = { focusMode: 'continuous' };
+      await track.applyConstraints({ advanced: [single] });
+      await track.applyConstraints({ advanced: [cont] });
+    } catch {
+      // Not supported — continuous mode (or default) keeps running.
+    }
   }
 
   private stopStream(): void {
@@ -249,6 +292,12 @@ export class CameraView {
         void video.play().catch(() => undefined);
         this.video = video;
       }
+      // Tap the preview to refocus (single-shot, then back to
+      // continuous) — helps on pages that never sharpen on their own.
+      this.video.onclick = () => {
+        const track = this.stream?.getVideoTracks()[0];
+        if (track) void this.focusAt(track);
+      };
       this.root.appendChild(this.video);
     } else {
       const fallback = document.createElement('div');
