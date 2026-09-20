@@ -25,7 +25,7 @@ STRIPE_PRICE_MONTHLY = "price_REPLACE_ME"
 [assets]
 directory = "../pwa/dist"
 not_found_handling = "single-page-application"
-run_worker_first = ["/summarize", "/quota", "/stripe/*", "/health"]
+run_worker_first = ["/summarize", "/quota", "/stripe/*", "/health", "/privacy-policy", "/data-deletion"]
 
 # Page-quota database. database_id comes from `wrangler d1 create
 # diagonal` (run once); migrations/ is applied with
