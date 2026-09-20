@@ -29,6 +29,11 @@ async function boot(): Promise<void> {
 
   const params = new URLSearchParams(window.location.search);
   const toast = toastForCheckout(params);
+  // Stripe redirects back immediately after payment while the webhook
+  // is still in flight — refresh once so a just-activated
+  // subscription flips the pill instead of showing stale free counts.
+  // Failure keeps the old quota (offline/Airplane) and the toast
+  // still explains the outcome.
   if (toast) {
     snackbar(toast);
     params.delete('checkout');
@@ -37,6 +42,7 @@ async function boot(): Promise<void> {
         ? `${window.location.pathname}?${params}`
         : window.location.pathname;
     window.history.replaceState(null, '', clean);
+    await billing.refreshQuota();
   }
 
   let camera: CameraView | null = null;

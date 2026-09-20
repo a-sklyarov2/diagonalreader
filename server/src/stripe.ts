@@ -183,22 +183,51 @@ function subscriptionStatus(obj: unknown): string {
   return '';
 }
 
-function periodEndMs(obj: unknown): number | null {
+function periodSeconds(value: unknown): number | null {
   if (
-    obj !== null &&
-    typeof obj === 'object' &&
-    'current_period_end' in obj
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0
   ) {
-    const candidate = obj.current_period_end;
-    if (
-      typeof candidate === 'number' &&
-      Number.isFinite(candidate) &&
-      candidate > 0
-    ) {
-      return Math.floor(candidate * 1000);
-    }
+    return value;
   }
   return null;
+}
+
+/**
+ * Subscription period end (ms). Since the 2025-03-31 Basil release
+ * Stripe serves it on subscription items
+ * (`items.data[].current_period_end`), not on the subscription
+ * itself — old accounts may still send the top-level field, so both
+ * are accepted and the earliest item end wins for multi-item
+ * subscriptions.
+ */
+function periodEndMs(obj: unknown): number | null {
+  if (obj === null || typeof obj !== 'object') return null;
+  let best: number | null = null;
+  if ('current_period_end' in obj) {
+    const top = periodSeconds(obj.current_period_end);
+    if (top !== null) best = top;
+  }
+  if ('items' in obj) {
+    const items = obj.items;
+    if (items !== null && typeof items === 'object' && 'data' in items) {
+      const data = items.data;
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          if (
+            entry !== null &&
+            typeof entry === 'object' &&
+            'current_period_end' in entry
+          ) {
+            const end = periodSeconds(entry.current_period_end);
+            if (end !== null && (best === null || end < best)) best = end;
+          }
+        }
+      }
+    }
+  }
+  return best === null ? null : Math.floor(best * 1000);
 }
 
 function subscriptionPriceId(sub: unknown, fallbackPrice: string): string {

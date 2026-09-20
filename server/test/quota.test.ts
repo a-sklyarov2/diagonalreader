@@ -178,15 +178,31 @@ function subscriptionJson(overrides?: {
   periodEndSec?: number;
   priceId?: string;
   status?: string;
+  basil?: boolean;
 }) {
+  const periodEnd =
+    overrides?.periodEndSec ?? Math.floor(Date.now() / 1000) + 30 * 86400;
+  // Basil (2025-03-31): period fields live on subscription items, not
+  // the subscription. Default fixtures use that shape; basil: false
+  // covers legacy top-level payloads.
+  const item: Record<string, unknown> = {
+    price: { id: overrides?.priceId ?? PRICE },
+  };
+  if (overrides?.basil === false) {
+    return {
+      id: 'sub_123',
+      customer: overrides?.customer ?? 'cus_123',
+      current_period_end: periodEnd,
+      status: overrides?.status ?? 'active',
+      items: { data: [item] },
+    };
+  }
   return {
     id: 'sub_123',
     customer: overrides?.customer ?? 'cus_123',
-    current_period_end:
-      overrides?.periodEndSec ?? Math.floor(Date.now() / 1000) + 30 * 86400,
     status: overrides?.status ?? 'active',
     items: {
-      data: [{ price: { id: overrides?.priceId ?? PRICE } }],
+      data: [{ ...item, current_period_end: periodEnd }],
     },
   };
 }
@@ -497,6 +513,33 @@ describe('POST /stripe/webhook (subscription access)', () => {
     );
     expect(deleted.status).toBe(200);
     expect((await getQuota(db, 'u1', 100, sept)).unlimited).toBe(false);
+  });
+  it('activates from legacy top-level current_period_end', async () => {
+    const { db } = makeFakeDb();
+    const env = { ...baseEnv, DB: db };
+    const sub = subscriptionJson({ basil: false });
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (`${url}`.endsWith('/subscriptions/sub_123')) {
+        return new Response(JSON.stringify(sub), { status: 200 });
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
+    const buy = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_legacy',
+            client_reference_id: 'u-legacy',
+            subscription: 'sub_123',
+            customer: 'cus_123',
+          },
+        },
+      }),
+      env,
+    );
+    expect(buy.status).toBe(200);
+    expect((await getQuota(db, 'u-legacy', 100, sept)).unlimited).toBe(true);
   });
 
   it('ignores unknown events, rejects bad signatures and malformed bodies', async () => {
