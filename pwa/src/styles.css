@@ -438,18 +438,27 @@ body {
   width: 100%;
   max-width: 560px;
   max-height: 88dvh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   border-radius: 20px 20px 0 0;
-  padding: 8px 20px calc(24px + env(safe-area-inset-bottom));
+  overflow: hidden;
 }
 
 .library-head {
-  position: sticky;
-  top: 0;
+  flex: none;
   background: #141414;
   display: flex;
   align-items: center;
-  padding: 8px 0 12px;
+  padding: 16px 20px 12px;
+  border-radius: 20px 20px 0 0;
+  z-index: 2;
+}
+
+.library-scroll {
+  overflow-y: auto;
+  overflow-x: clip;
+  overscroll-behavior: contain;
+  padding: 4px 20px calc(24px + env(safe-area-inset-bottom));
 }
 
 .library-title {
@@ -584,6 +593,12 @@ body {
   font-size: 15px;
   font-weight: 700;
   margin-bottom: 6px;
+}
+
+.library-tier + .library-tier {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .library-star {

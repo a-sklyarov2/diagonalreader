@@ -136,11 +136,16 @@ export class LibraryView {
     head.append(back, title);
     sheet.appendChild(head);
 
-    sheet.appendChild(this.usageCard());
-    sheet.appendChild(this.subscriptionCard());
-    sheet.appendChild(this.readingCard());
-    sheet.appendChild(this.deviceCard());
-    sheet.appendChild(this.footnote());
+    // Header is fixed flex chrome; only this region scrolls, so
+    // content can never slide under the Library title.
+    const scroll = document.createElement('div');
+    scroll.className = 'library-scroll';
+    scroll.appendChild(this.usageCard());
+    scroll.appendChild(this.subscriptionCard());
+    scroll.appendChild(this.readingCard());
+    scroll.appendChild(this.deviceCard());
+    scroll.appendChild(this.footnote());
+    sheet.appendChild(scroll);
 
     this.root.appendChild(sheet);
     this.root.onclick = (e) => {
@@ -319,6 +324,7 @@ export class LibraryView {
   private freeBlock(): HTMLElement {
     const wrap = document.createElement('div');
     wrap.dataset.testid = 'freeTier';
+    wrap.className = 'library-tier';
     const title = document.createElement('div');
     title.className = 'library-tier-title';
     title.textContent = 'Free — 100 pages every month';
@@ -333,6 +339,7 @@ export class LibraryView {
 
   private subscribeBlock(): HTMLElement {
     const wrap = document.createElement('div');
+    wrap.className = 'library-tier';
     const title = document.createElement('div');
     title.className = 'library-tier-title';
     const star = document.createElement('span');
@@ -344,8 +351,8 @@ export class LibraryView {
     sup.setAttribute('aria-label', 'See Unlimited footnote');
     sup.addEventListener('click', (e) => {
       e.preventDefault();
-      document
-        .querySelector('#unlimited-note')
+      this.sheet
+        ?.querySelector('#unlimited-note')
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     title.append(star, sup);
