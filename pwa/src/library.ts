@@ -2,6 +2,11 @@
  * Library sheet: usage, subscription, reading preferences, device.
  * Opened from the quota pill (cog) on camera and the gear in reader.
  * Checkout/portal are explicit buttons here — never auto-redirects.
+ *
+ * Rendering: the sheet is built once. Billing/prefs updates patch the
+ * live DOM in place (scroll position preserved); only the mount-time
+ * error→loaded transition rebuilds. Policy pages open in the system
+ * browser (target _blank is unreliable inside installed standalone).
  */
 
 import { openPortal, startCheckout } from './api';
@@ -27,10 +32,13 @@ function nextResetLabel(month: string): string {
 
 export class LibraryView {
   private root: HTMLElement;
+  private sheet: HTMLElement | null = null;
+  private voiceNote: HTMLElement | null = null;
+  private sizePreview: HTMLElement | null = null;
+  private built = false;
   private unsubBilling: (() => void) | null = null;
   private unsubPrefs: (() => void) | null = null;
   private destroyed = false;
-
   constructor(
     private app: HTMLElement,
     private billing: Billing,
@@ -45,10 +53,10 @@ export class LibraryView {
   mount(): void {
     this.app.appendChild(this.root);
     this.unsubBilling = this.billing.onChange(() => {
-      if (!this.destroyed) this.render();
+      if (!this.destroyed) this.update();
     });
     this.unsubPrefs = onPrefsChange(() => {
-      if (!this.destroyed) this.render();
+      if (!this.destroyed) this.updatePrefs();
     });
     this.render();
     void this.billing.refreshQuota();
@@ -59,6 +67,10 @@ export class LibraryView {
     this.unsubBilling?.();
     this.unsubPrefs?.();
     this.root.remove();
+    this.sheet = null;
+    this.voiceNote = null;
+    this.sizePreview = null;
+    this.built = false;
   }
 
   private async subscribe(): Promise<void> {
@@ -81,12 +93,33 @@ export class LibraryView {
     }
   }
 
+  /**
+   * Policy pages (plain server HTML) must escape the standalone PWA:
+   * in `display: standalone` there is no address bar, so in-app
+   * navigation strands the user. An anchor with target _blank asks
+   * the OS to use the system browser (Android Chrome: always;
+   * iOS standalone: opens Safari). window.open is popup-blocked
+   * outside real tap handlers — hence a real link click, not a
+   * script open.
+   */
+  private openPolicy(path: '/privacy-policy' | '/data-deletion'): void {
+    const a = document.createElement('a');
+    a.href = `${window.location.origin}${path}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  /** Full build once; afterwards patch live regions in place. */
   private render(): void {
     if (this.destroyed) return;
     this.root.innerHTML = '';
 
     const sheet = document.createElement('div');
     sheet.className = 'library';
+    this.sheet = sheet;
 
     const head = document.createElement('div');
     head.className = 'library-head';
@@ -107,11 +140,71 @@ export class LibraryView {
     sheet.appendChild(this.subscriptionCard());
     sheet.appendChild(this.readingCard());
     sheet.appendChild(this.deviceCard());
+    sheet.appendChild(this.footnote());
 
     this.root.appendChild(sheet);
     this.root.onclick = (e) => {
       if (e.target === this.root) this.onClose();
     };
+    this.built = true;
+  }
+
+  /**
+   * Billing updates (quota fetch landing, subscribe state): patch the
+   * two billing card bodies in place. Refs are looked up from the
+   * live DOM on every call, so nothing goes stale across renders;
+   * segmented controls and scroll position are never touched.
+   */
+  private update(): void {
+    if (this.destroyed || !this.built || !this.sheet) return;
+    const usage = this.sheet.querySelector<HTMLElement>(
+      '[data-testid="usageCard"]',
+    );
+    if (usage) this.fillUsage(usage);
+    const sub = this.sheet.querySelector<HTMLElement>(
+      '[data-testid="subCard"]',
+    );
+    if (sub) this.fillSubscription(sub);
+  }
+  /** Prefs updates: pressed states + notes, never a rebuild. */
+  private updatePrefs(): void {
+    if (this.destroyed || !this.built || !this.sheet) return;
+    const voice = getVoice();
+    const size = getTextSize();
+    const buttons = this.sheet.querySelectorAll<HTMLButtonElement>(
+      '.library-seg button',
+    );
+    for (let i = 0; i < buttons.length; i++) {
+      const btn = buttons[i];
+      const testid = btn.dataset.testid ?? '';
+      const value =
+        testid === 'voiceFaithful'
+          ? 'faithful'
+          : testid === 'voicePlain'
+            ? 'plain'
+            : testid === 'sizeSmall'
+              ? 'small'
+              : testid === 'sizeMedium'
+                ? 'medium'
+                : testid === 'sizeLarge'
+                  ? 'large'
+                  : null;
+      if (value !== null) {
+        btn.setAttribute(
+          'aria-pressed',
+          `${value === voice || value === size}`,
+        );
+      }
+    }
+    if (this.voiceNote) {
+      this.voiceNote.textContent =
+        voice === 'plain'
+          ? 'Retells the same ideas in simple, everyday language — best for dense, old, or technical books.'
+          : 'Keeps the author’s style, tone and words — reads like a shorter version of the page.';
+    }
+    if (this.sizePreview) {
+      this.sizePreview.style.fontSize = `${TEXT_SIZES[size].px}px`;
+    }
   }
 
   private card(title: string): { el: HTMLElement; body: HTMLElement } {
@@ -127,12 +220,27 @@ export class LibraryView {
   private usageCard(): HTMLElement {
     const { el, body } = this.card('Usage');
     body.dataset.testid = 'usageCard';
+    const filled = this.fillUsage(body);
+    if (filled !== body) {
+      body.replaceWith(filled);
+      return el;
+    }
+    return el;
+  }
+
+  private fillUsage(body: HTMLElement): HTMLElement {
     const quota = this.billing.quota;
+    const state = this.billing.ready
+      ? quota
+        ? 'loaded'
+        : 'error'
+      : 'loading';
+    body.dataset.state = state;
+    body.innerHTML = '';
 
     if (!this.billing.ready) {
       body.textContent = 'Checking usage…';
-      el.appendChild(body);
-      return el;
+      return body;
     }
     if (!quota) {
       const p = document.createElement('p');
@@ -144,7 +252,7 @@ export class LibraryView {
       retry.textContent = 'Retry';
       retry.addEventListener('click', () => void this.billing.refreshQuota());
       body.append(p, retry);
-      return el;
+      return body;
     }
 
     const big = document.createElement('div');
@@ -156,11 +264,10 @@ export class LibraryView {
     bar.className = 'library-bar';
     const fill = document.createElement('div');
     fill.className = 'library-bar-fill';
-    const pct = quota.unlimited
-      ? Math.min(100, (quota.paidUsed / quota.paidCap) * 100)
-      : quota.freeTotal > 0
-        ? Math.min(100, (quota.freeUsed / quota.freeTotal) * 100)
-        : 0;
+    const pct =
+      quota.unlimited || quota.freeTotal <= 0
+        ? 0
+        : Math.min(100, (quota.freeUsed / quota.freeTotal) * 100);
     fill.style.width = `${pct}%`;
     bar.appendChild(fill);
     body.appendChild(bar);
@@ -168,54 +275,82 @@ export class LibraryView {
     const sub = document.createElement('p');
     sub.className = 'library-muted';
     if (quota.unlimited) {
-      sub.textContent =
-        `Unlimited · ${quota.paidUsed} pages this month · ` +
-        `${quota.dailyUsed} of ${quota.dailyCap} today`;
+      // Subscribers don't ration pages — no counters, just the state.
+      sub.textContent = 'Unlimited* is active on this device.';
     } else {
       const reset = nextResetLabel(quota.month);
       sub.textContent =
         `${quota.freeUsed} of ${quota.freeTotal} free pages used` +
         (reset ? ` · ${reset}` : '');
+      body.appendChild(sub);
       if (!quota.canSummarize) {
         const deny = document.createElement('p');
         deny.className = 'library-warn';
         deny.textContent = quota.denialMessage;
-        body.appendChild(sub);
         body.appendChild(deny);
-        return el;
+        return body;
       }
+      return body;
     }
     body.appendChild(sub);
-    return el;
+    return body;
   }
 
   private subscriptionCard(): HTMLElement {
     const { el, body } = this.card('Subscription');
+    body.dataset.testid = 'subCard';
+    this.fillSubscription(body);
+    return el;
+  }
+
+  private fillSubscription(body: HTMLElement): HTMLElement {
     const quota = this.billing.quota;
-
+    body.innerHTML = '';
     if (quota?.unlimited) {
-      const p = document.createElement('p');
-      p.textContent =
-        'Unlimited is active on this device. Summarize as much as you read.';
-      const manage = document.createElement('button');
-      manage.type = 'button';
-      manage.className = 'library-btn secondary';
-      manage.dataset.testid = 'libraryManage';
-      manage.textContent = 'Manage subscription';
-      manage.addEventListener('click', () => void this.manage());
-      const note = document.createElement('p');
-      note.className = 'library-muted';
-      note.textContent =
-        'Cancel anytime — access runs to the end of the paid period.';
-      body.append(p, manage, note);
-      return el;
+      body.appendChild(this.manageBlock());
+      return body;
     }
+    body.appendChild(this.freeBlock());
+    body.appendChild(this.subscribeBlock());
+    return body;
+  }
 
+  /** Free tier, framed as the product — not a trial of the paid one. */
+  private freeBlock(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.dataset.testid = 'freeTier';
+    const title = document.createElement('div');
+    title.className = 'library-tier-title';
+    title.textContent = 'Free — 100 pages every month';
     const p = document.createElement('p');
+    p.className = 'library-muted';
     p.textContent =
-      '100 free pages every month. Unlimited removes the counter: ' +
-      'summarize as much as you read, with fair guardrails ' +
-      '(500 pages a day, 10,000 a month) so one account can’t resell the model.';
+      'No account, no card. Photograph a page, get a summary. ' +
+      'Resets on the 1st; unused pages don’t roll over.';
+    wrap.append(title, p);
+    return wrap;
+  }
+
+  private subscribeBlock(): HTMLElement {
+    const wrap = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'library-tier-title';
+    const star = document.createElement('span');
+    star.textContent = 'Unlimited';
+    const sup = document.createElement('a');
+    sup.className = 'library-star';
+    sup.href = '#unlimited-note';
+    sup.textContent = '*';
+    sup.setAttribute('aria-label', 'See Unlimited footnote');
+    sup.addEventListener('click', (e) => {
+      e.preventDefault();
+      document
+        .querySelector('#unlimited-note')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    title.append(star, sup);
+    const p = document.createElement('p');
+    p.textContent = 'Read without counting. One monthly plan.';
     const cta = document.createElement('button');
     cta.type = 'button';
     cta.className = 'library-btn primary';
@@ -224,9 +359,39 @@ export class LibraryView {
     cta.addEventListener('click', () => void this.subscribe());
     const note = document.createElement('p');
     note.className = 'library-muted';
-    note.textContent = 'One monthly plan · cancel anytime in the portal.';
-    body.append(p, cta, note);
-    return el;
+    note.textContent = 'Cancel anytime in the portal.';
+    wrap.append(title, p, cta, note);
+    return wrap;
+  }
+
+  private manageBlock(): HTMLElement {
+    const wrap = document.createElement('div');
+    const p = document.createElement('p');
+    p.textContent =
+      'Unlimited* is active on this device. Read without counting.';
+    const manage = document.createElement('button');
+    manage.type = 'button';
+    manage.className = 'library-btn secondary';
+    manage.dataset.testid = 'libraryManage';
+    manage.textContent = 'Manage subscription';
+    manage.addEventListener('click', () => void this.manage());
+    const note = document.createElement('p');
+    note.className = 'library-muted';
+    note.textContent =
+      'Cancel anytime — access runs to the end of the paid period.';
+    wrap.append(p, manage, note);
+    return wrap;
+  }
+
+  private footnote(): HTMLElement {
+    const foot = document.createElement('p');
+    foot.className = 'library-footnote';
+    foot.id = 'unlimited-note';
+    foot.textContent =
+      '*Unlimited means 5,000 pages a month guaranteed; beyond that, ' +
+      'availability depends on system load. Designed for human reading — ' +
+      'if you can outread it, congratulations.';
+    return foot;
   }
 
   private segmented<T extends string>(
@@ -263,16 +428,16 @@ export class LibraryView {
       getVoice(),
       (v) => setVoice(v),
     );
-    const voiceNote = document.createElement('p');
-    voiceNote.className = 'library-muted';
-    voiceNote.textContent =
+    const note = document.createElement('p');
+    note.className = 'library-muted';
+    note.textContent =
       getVoice() === 'plain'
         ? 'Retells the same ideas in simple, everyday language — best for dense, old, or technical books.'
         : 'Keeps the author’s style, tone and words — reads like a shorter version of the page.';
-    const voiceNote2 = document.createElement('p');
-    voiceNote2.className = 'library-muted';
-    voiceNote2.textContent =
-      'Applies to new pages, and to re-summaries from ↻.';
+    this.voiceNote = note;
+    const applies = document.createElement('p');
+    applies.className = 'library-muted';
+    applies.textContent = 'Applies to new pages, and to re-summaries from ↻.';
 
     const sizeLabel = document.createElement('div');
     sizeLabel.className = 'library-label';
@@ -286,13 +451,14 @@ export class LibraryView {
       getTextSize(),
       (v) => setTextSize(v),
     );
-    const sizePreview = document.createElement('p');
-    sizePreview.className = 'library-preview';
-    sizePreview.style.fontSize = `${TEXT_SIZES[getTextSize()].px}px`;
-    sizePreview.textContent = 'The organization man wants to belong together.';
+    const preview = document.createElement('p');
+    preview.className = 'library-preview';
+    preview.style.fontSize = `${TEXT_SIZES[getTextSize()].px}px`;
+    preview.textContent = 'The organization man wants to belong together.';
+    this.sizePreview = preview;
 
-    body.append(voiceLabel, voice, voiceNote, voiceNote2);
-    body.append(sizeLabel, size, sizePreview);
+    body.append(voiceLabel, voice, note, applies);
+    body.append(sizeLabel, size, preview);
     return el;
   }
 
@@ -315,17 +481,17 @@ export class LibraryView {
     row.append(id, copy);
     const links = document.createElement('p');
     links.className = 'library-muted';
-    const priv = document.createElement('a');
-    priv.href = '/privacy-policy';
-    priv.target = '_blank';
-    priv.rel = 'noopener';
+    const priv = document.createElement('button');
+    priv.type = 'button';
+    priv.className = 'library-link';
     priv.textContent = 'Privacy';
+    priv.addEventListener('click', () => this.openPolicy('/privacy-policy'));
     const sep = document.createTextNode(' · ');
-    const del = document.createElement('a');
-    del.href = '/data-deletion';
-    del.target = '_blank';
-    del.rel = 'noopener';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'library-link';
     del.textContent = 'Data deletion';
+    del.addEventListener('click', () => this.openPolicy('/data-deletion'));
     links.append(priv, sep, del);
     body.append(row, links);
     return el;

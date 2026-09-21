@@ -26,6 +26,11 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: 'index.html',
+        // Policy pages are real server routes (Worker serves them
+        // before assets). Without this, an installed PWA with a
+        // cached shell serves index.html for them when offline or
+        // when the precache wins — the "links don't work" bug.
+        navigateFallbackDenylist: [/^\/privacy-policy/, /^\/data-deletion/],
         runtimeCaching: [
           {
             urlPattern: /^(\/summarize|\/quota|\/stripe\/)/,
