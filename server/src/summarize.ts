@@ -53,12 +53,32 @@ export function isLevel(value: unknown): value is Level {
   );
 }
 
-export function userPrompt(level: Level): string {
+/**
+ * Summary voice: `faithful` preserves the author's style (default);
+ * `plain` retells the same content in simple everyday language for
+ * dense, archaic, or technical prose. Unknown values fall back to
+ * faithful so old clients keep working.
+ */
+export type Voice = 'faithful' | 'plain';
+
+export function isVoice(value: unknown): value is Voice {
+  return typeof value === 'string' && value === 'plain';
+}
+
+export function normalizeVoice(value: unknown): Voice {
+  return isVoice(value) ? 'plain' : 'faithful';
+}
+
+export function userPrompt(level: Level, voice: Voice = 'faithful'): string {
+  const style =
+    voice === 'plain'
+      ? 'Retell it in simple, clear, everyday language — short sentences, common words, no archaisms or jargon. '
+      : "Preserve the author's original style, voice, tone and terminology — " +
+        'write the summary as if the author wrote a shorter version themselves. ';
   return (
     `Summarize the text on this book page to ${LEVELS[level].target}. ` +
     'Write the summary in the same language as the text on the page. ' +
-    "Preserve the author's original style, voice, tone and terminology — " +
-    'write the summary as if the author wrote a shorter version themselves. ' +
+    style +
     'Output ONLY the summary, no preamble, no commentary.'
   );
 }
@@ -100,6 +120,8 @@ export async function summarize(
       { status: 400 },
     );
   }
+  // Optional; unknown/missing falls back to faithful (old clients).
+  const voice = normalizeVoice(form.get('voice'));
   const image = form.get('image');
   if (!(image instanceof File)) {
     return Response.json(
@@ -169,7 +191,7 @@ export async function summarize(
         {
           role: 'user',
           content: [
-            { type: 'text', text: userPrompt(levelRaw) },
+            { type: 'text', text: userPrompt(levelRaw, voice) },
             {
               type: 'image_url',
               image_url: {

@@ -4,14 +4,17 @@
  */
 
 import { ApiError, summarizeStream } from './api';
-import type { Level } from './api';
+import type { Level, Voice } from './api';
 import { preparePageImage } from './image';
+
+export type { Voice };
 
 export type PageState = 'streaming' | 'done' | 'error';
 
 export interface SummaryPage {
   id: string;
   level: Level;
+  voice: Voice;
   text: string;
   state: PageState;
   error: string | null;
@@ -24,6 +27,7 @@ export type SessionEvent =
 interface StoredPhoto {
   blob: Blob;
   level: Level;
+  voice?: Voice;
   text: string;
 }
 
@@ -71,6 +75,15 @@ function tx<T>(
   return promise;
 }
 
+function asLevel(value: unknown): Level {
+  if (value === 'low' || value === 'high' || value === 'max') return value;
+  return 'high';
+}
+
+function asVoice(value: unknown): Voice {
+  return value === 'plain' ? 'plain' : 'faithful';
+}
+
 async function readPhoto(id: string): Promise<StoredPhoto | null> {
   try {
     const row = await tx('readonly', (s) => s.get(id));
@@ -82,13 +95,12 @@ async function readPhoto(id: string): Promise<StoredPhoto | null> {
     ) {
       return null;
     }
-    const level: Level =
-      candidate.level === 'low' ||
-      candidate.level === 'high' ||
-      candidate.level === 'max'
-        ? candidate.level
-        : 'high';
-    return { blob: candidate.blob, level, text: candidate.text };
+    return {
+      blob: candidate.blob,
+      level: asLevel(candidate.level),
+      voice: asVoice(candidate.voice),
+      text: candidate.text,
+    };
   } catch {
     return null;
   }
@@ -187,6 +199,7 @@ export class ReadingSession {
       this.pages.push({
         id,
         level: photo.level,
+        voice: asVoice(photo.voice),
         text: photo.text,
         state: photo.text !== '' ? 'done' : 'error',
         error: photo.text !== '' ? null : 'Empty response from model',
@@ -200,11 +213,16 @@ export class ReadingSession {
    * Register a page immediately (UI can navigate to it) and stream
    * the summary in the background.
    */
-  async startPage(source: Blob, level: Level): Promise<SummaryPage> {
+  async startPage(
+    source: Blob,
+    level: Level,
+    voice: Voice,
+  ): Promise<SummaryPage> {
     const id = crypto.randomUUID();
     const page: SummaryPage = {
       id,
       level,
+      voice,
       text: '',
       state: 'streaming',
       error: null,
@@ -213,24 +231,31 @@ export class ReadingSession {
     this.emit({ kind: 'pages' });
     // Photo persistence failed — the page still streams; a reload
     // just won't restore it.
-    await writePhoto(id, { blob: source, level, text: '' });
+    await writePhoto(id, { blob: source, level, voice, text: '' });
     void this.run(id);
     return page;
   }
 
   retry(page: SummaryPage): Promise<void> {
-    return this.resummarize(page, page.level);
+    return this.resummarize(page, page.level, page.voice);
   }
 
   /** Resubmits the stored blob (costs quota like a fresh capture). */
-  async resummarize(page: SummaryPage, level: Level): Promise<void> {
+  async resummarize(
+    page: SummaryPage,
+    level: Level,
+    voice: Voice,
+  ): Promise<void> {
     page.level = level;
+    page.voice = voice;
     page.text = '';
     page.state = 'streaming';
     page.error = null;
     this.emit({ kind: 'page', id: page.id });
     const stored = await readPhoto(page.id);
-    if (stored) await writePhoto(page.id, { ...stored, level, text: '' });
+    if (stored) {
+      await writePhoto(page.id, { ...stored, level, voice, text: '' });
+    }
     return this.run(page.id);
   }
 
@@ -251,7 +276,12 @@ export class ReadingSession {
         throw new Error('Photo unavailable — capture the page again.');
       }
       const jpeg = await preparePageImage(stored.blob);
-      const stream = summarizeStream(jpeg, page.level, this.userId);
+      const stream = summarizeStream(
+        jpeg,
+        page.level,
+        page.voice,
+        this.userId,
+      );
       let yielded = false;
       for await (const delta of stream) {
         const current = this.page(id);
@@ -273,6 +303,7 @@ export class ReadingSession {
       await writePhoto(id, {
         blob: stored.blob,
         level: current.level,
+        voice: current.voice,
         text: current.text,
       });
     } catch (e) {

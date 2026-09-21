@@ -2,10 +2,10 @@
 
 import type { Level } from './api';
 import { Billing } from './billing';
+import { getTextSize, getVoice, onPrefsChange, TEXT_SIZES } from './prefs';
 import { ReadingSession } from './session';
 import type { SummaryPage } from './session';
 import { snackbar } from './ui';
-
 const LEVELS: Level[] = ['low', 'high', 'max'];
 
 function levelLabel(level: Level): string {
@@ -29,6 +29,7 @@ export class ReaderView {
     private initialIndex: number,
     private onEmpty: () => void,
     private onBack: () => void,
+    private onLibrary: () => void,
   ) {
     this.root = document.createElement('div');
     this.root.className = 'reader';
@@ -42,7 +43,7 @@ export class ReaderView {
       Math.max(this.pages.length - 1, 0),
     );
     this.render();
-    this.unsub = this.session.onChange((e) => {
+    const unsubSession = this.session.onChange((e) => {
       if (this.destroyed) return;
       if (e.kind === 'pages') {
         // Keep the snapshot stable across deletes/added pages.
@@ -61,12 +62,21 @@ export class ReaderView {
       }
       this.renderCounter();
     });
+    // Text-size changes re-render in place (no new quota spent).
+    const unsubPrefs = onPrefsChange(() => {
+      if (!this.destroyed) this.render();
+    });
+    this.unsub = () => {
+      unsubSession();
+      unsubPrefs();
+    };
     this.scrollTo(this.current, false);
   }
 
   destroy(): void {
     this.destroyed = true;
     this.unsub?.();
+    this.unsub = null;
     for (const url of this.photoUrls.values()) URL.revokeObjectURL(url);
     this.photoUrls.clear();
     this.root.remove();
@@ -165,7 +175,6 @@ export class ReaderView {
       pages.appendChild(this.pageEl(this.pages[i], i));
     }
     this.root.appendChild(pages);
-
     const top = document.createElement('div');
     top.className = 'reader-topbar';
     const back = document.createElement('button');
@@ -179,6 +188,13 @@ export class ReaderView {
     counter.className = 'page-counter';
     counter.dataset.testid = 'pageCounter';
     this.counterEl = counter;
+    const gear = document.createElement('button');
+    gear.type = 'button';
+    gear.className = 'icon-btn';
+    gear.dataset.testid = 'readerLibrary';
+    gear.textContent = '⚙';
+    gear.setAttribute('aria-label', 'Open library');
+    gear.addEventListener('click', () => this.onLibrary());
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'icon-btn danger';
@@ -186,7 +202,7 @@ export class ReaderView {
     del.textContent = '🗑';
     del.setAttribute('aria-label', 'Delete summary');
     del.addEventListener('click', () => this.deleteCurrent());
-    top.append(back, counter, del);
+    top.append(back, counter, gear, del);
     this.root.appendChild(top);
     this.renderCounter();
 
@@ -211,7 +227,9 @@ export class ReaderView {
         pop.classList.remove('open');
         const page = this.pages[this.current];
         if (page) {
-          this.gated(() => this.session.resummarize(page, level));
+          this.gated(() =>
+            this.session.resummarize(page, level, getVoice()),
+          );
         }
       });
       pop.appendChild(item);
@@ -302,10 +320,14 @@ export class ReaderView {
     } else if (page.text !== '') {
       const chip = document.createElement('div');
       chip.className = 'level-chip';
-      chip.textContent = levelLabel(page.level);
+      chip.textContent =
+        page.voice === 'plain'
+          ? `${levelLabel(page.level)} · plain`
+          : levelLabel(page.level);
       const text = document.createElement('div');
       text.className = 'summary-text';
       text.dataset.testid = 'summaryText';
+      text.style.fontSize = `${TEXT_SIZES[getTextSize()].px}px`;
       if (page.state === 'streaming') {
         text.textContent = page.text;
         const cursor = document.createElement('span');

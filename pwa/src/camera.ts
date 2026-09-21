@@ -3,9 +3,10 @@
 import { ApiError } from './api';
 import type { Level } from './api';
 import { Billing } from './billing';
+import { getVoice } from './prefs';
 import { ReadingSession } from './session';
 import type { SummaryPage } from './session';
-import { showDialog, snackbar } from './ui';
+import { snackbar } from './ui';
 
 const LEVELS: Level[] = ['low', 'high', 'max'];
 
@@ -24,14 +25,13 @@ export class CameraView {
   private pillLabel = '…';
   private pillVisible = false;
   private unsubBilling: (() => void) | null = null;
-  private longPressTimer = 0;
   private destroyed = false;
-
   constructor(
     private app: HTMLElement,
     private session: ReadingSession,
     private billing: Billing,
     private onCapture: (page: SummaryPage, index: number) => void,
+    private onLibrary: () => void,
     private deps: CameraDeps = {},
   ) {
     this.root = document.createElement('div');
@@ -53,7 +53,6 @@ export class CameraView {
   destroy(): void {
     this.destroyed = true;
     this.unsubBilling?.();
-    window.clearTimeout(this.longPressTimer);
     this.stopStream();
     this.root.remove();
   }
@@ -151,37 +150,12 @@ export class CameraView {
     this.video = null;
   }
 
-  private showUserIdDialog(extra?: string): void {
-    const lines = [this.session.userId];
-    if (extra) lines.push(extra);
-    showDialog('User ID', lines, [
-      {
-        label: 'Copy',
-        onClick: () => {
-          void navigator.clipboard
-            ?.writeText(this.session.userId)
-            .catch(() => undefined);
-        },
-      },
-      { label: 'Close' },
-    ]);
-  }
-
-  private async onPillTap(): Promise<void> {
+  private onPillTap(): void {
     if (!this.billing.ready) return;
-    if (this.billing.quota === null) {
-      this.showUserIdDialog(
-        this.billing.quotaError ?? 'quota unavailable',
-      );
-      return;
-    }
-    try {
-      await this.billing.pillAction();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : `${e}`;
-      if (msg.startsWith('redirecting')) return;
-      snackbar(msg);
-    }
+    // The cog means settings: open the Library sheet (usage,
+    // subscription, reading prefs). Checkout lives there as an
+    // explicit button — never an auto-redirect from here.
+    this.onLibrary();
   }
 
   /**
@@ -219,12 +193,14 @@ export class CameraView {
     // take a while and shouldn't look like a stuck photo capture.
     const allowed = await this.billing.ensureAllowance();
     if (!allowed) {
-      snackbar(this.billing.lastError ?? 'Out of pages — subscribe to keep reading.');
-      // Subscriber portal flow refreshes on return; free users land
-      // on checkout via the pill.
-      if (this.billing.quota === null) {
-        this.showUserIdDialog(
-          this.billing.quotaError ?? 'quota unavailable',
+      // Free exhaustion opens the Library (usage + subscribe CTA);
+      // guardrail/quota-fetch failures stay a snackbar.
+      const denial = this.billing.quota?.denial;
+      if (denial === 'free') {
+        this.onLibrary();
+      } else {
+        snackbar(
+          this.billing.lastError ?? 'Out of pages — subscribe to keep reading.',
         );
       }
       return;
@@ -233,7 +209,11 @@ export class CameraView {
     this.render();
     try {
       const blob = await this.grabFrame();
-      const page = await this.session.startPage(blob, this.level);
+      const page = await this.session.startPage(
+        blob,
+        this.level,
+        getVoice(),
+      );
       const index = this.session.pages.indexOf(page);
       // The page was paid for while the reader is open — refresh on
       // return so the pill increments immediately.
@@ -369,27 +349,16 @@ export class CameraView {
     pill.type = 'button';
     pill.className = 'quota-pill';
     pill.dataset.testid = 'quotaPill';
+    pill.setAttribute('aria-label', 'Open library');
     const label = document.createElement('span');
     label.textContent = this.pillLabel;
     const gear = document.createElement('span');
     gear.className = 'gear';
     gear.textContent = '⚙';
     pill.append(label, gear);
-    pill.addEventListener('click', () => void this.onPillTap());
-    pill.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      this.showUserIdDialog();
-    });
-    pill.addEventListener('pointerdown', () => {
-      window.clearTimeout(this.longPressTimer);
-      this.longPressTimer = window.setTimeout(
-        () => this.showUserIdDialog(),
-        600,
-      );
-    });
-    pill.addEventListener('pointerup', () => {
-      window.clearTimeout(this.longPressTimer);
-    });
+    // The whole pill opens the Library sheet — id dialog and
+    // checkout moved there as explicit rows/buttons.
+    pill.addEventListener('click', () => this.onPillTap());
     this.root.appendChild(pill);
   }
 }

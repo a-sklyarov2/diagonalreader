@@ -4,6 +4,7 @@ import worker from '../src/index';
 import {
   LEVELS,
   isLevel,
+  normalizeVoice,
   toBase64,
   userPrompt,
   type Env,
@@ -20,10 +21,12 @@ const sseBody =
 
 function formRequest(fields: {
   level?: string;
+  voice?: string;
   image?: Uint8Array;
 }): Request {
   const form = new FormData();
   if (fields.level !== undefined) form.set('level', fields.level);
+  if (fields.voice !== undefined) form.set('voice', fields.voice);
   if (fields.image !== undefined) {
     form.set(
       'image',
@@ -54,6 +57,17 @@ describe('levels + prompt', () => {
     expect(prompt).toContain('same language as the text on the page');
     expect(prompt).toContain("author's original style");
     expect(prompt).toContain('ONLY the summary');
+  });
+
+  it('plain voice simplifies instead of preserving style', () => {
+    const prompt = userPrompt('high', 'plain');
+    expect(prompt).toContain(LEVELS.high.target);
+    expect(prompt).toContain('simple, clear, everyday language');
+    expect(prompt).not.toContain("author's original style");
+    expect(normalizeVoice('plain')).toBe('plain');
+    expect(normalizeVoice('faithful')).toBe('faithful');
+    expect(normalizeVoice('bogus')).toBe('faithful');
+    expect(normalizeVoice(null)).toBe('faithful');
   });
 
   it('base64 round-trips', () => {
@@ -207,5 +221,32 @@ describe('fetch router', () => {
     expect(await res.json()).toEqual({
       error: 'openrouter 503: {"error":"overloaded"}',
     });
+  });
+
+  it('forwards plain voice into the prompt', async () => {
+    let seenBody: Record<string, unknown> = {};
+    vi.stubGlobal(
+      'fetch',
+      async (_url: string, init: RequestInit) => {
+        seenBody = JSON.parse(init.body as string) as Record<
+          string,
+          unknown
+        >;
+        return new Response(sseBody, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    );
+    const res = await worker.fetch(
+      formRequest({
+        level: 'high',
+        voice: 'plain',
+        image: new Uint8Array([1, 2, 3]),
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(seenBody)).toContain('everyday language');
   });
 });

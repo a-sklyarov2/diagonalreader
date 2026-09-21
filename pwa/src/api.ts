@@ -4,7 +4,7 @@ import { QuotaStatus } from './quota';
 import type { QuotaJson } from './quota';
 
 export type Level = 'low' | 'high' | 'max';
-
+export type Voice = 'faithful' | 'plain';
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -44,10 +44,12 @@ interface SseChoice {
 export async function* summarizeStream(
   jpeg: Blob,
   level: Level,
+  voice: Voice,
   userId: string,
 ): AsyncGenerator<string> {
   const form = new FormData();
   form.set('level', level);
+  form.set('voice', voice);
   form.set('image', jpeg, 'page.jpg');
   const res = await fetch('/summarize', {
     method: 'POST',

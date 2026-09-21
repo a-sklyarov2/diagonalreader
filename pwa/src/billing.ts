@@ -1,6 +1,6 @@
-/** Quota gate + Stripe entry points (PWA equivalent of BillingApi). */
+/** Quota gate (Stripe entry points live in the Library sheet). */
 
-import { fetchQuota, openPortal, startCheckout } from './api';
+import { fetchQuota } from './api';
 import { QuotaStatus } from './quota';
 
 export class Billing {
@@ -42,8 +42,9 @@ export class Billing {
   /**
    * True when the user may summarize now. Free exhaustion and
    * subscriber guardrails deny with denialMessage (never a raw
-   * status); checkout is entered via the pill, never auto-redirected
-   * here so background retries can't yank the page away.
+   * status); checkout is entered from the Library sheet, never
+   * auto-redirected here so background retries can't yank the page
+   * away.
    */
   async ensureAllowance(): Promise<boolean> {
     await this.refreshQuota();
@@ -60,14 +61,5 @@ export class Billing {
     }
     this.emit();
     return false;
-  }
-
-  /** Pill tap: subscribers manage, everyone else subscribes. */
-  async pillAction(): Promise<void> {
-    if (this.quota?.unlimited) {
-      await openPortal(this.userId);
-    } else {
-      await startCheckout(this.userId);
-    }
   }
 }

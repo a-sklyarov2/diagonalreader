@@ -256,7 +256,7 @@ body {
 
 .summary-text {
   color: #fff;
-  font-size: 21px;
+  font-size: var(--summary-px, 21px);
   line-height: 1.55;
   text-shadow:
     0 1px 8px rgba(0, 0, 0, 0.87),
@@ -418,6 +418,170 @@ body {
 
 .resum-pop button:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- library sheet ---------- */
+
+.library-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+}
+
+.library {
+  background: #141414;
+  color: #fff;
+  width: 100%;
+  max-width: 560px;
+  max-height: 88dvh;
+  overflow-y: auto;
+  border-radius: 20px 20px 0 0;
+  padding: 8px 20px calc(24px + env(safe-area-inset-bottom));
+}
+
+.library-head {
+  position: sticky;
+  top: 0;
+  background: #141414;
+  display: flex;
+  align-items: center;
+  padding: 8px 0 12px;
+}
+
+.library-title {
+  flex: 1;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+  margin-right: 46px;
+}
+
+.library-card {
+  background: #1c1c1c;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.library-card h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.library-card p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.library-card p:last-child {
+  margin-bottom: 0;
+}
+
+.library-muted {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+}
+
+.library-warn {
+  color: #ffb74d;
+}
+
+.library-big {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.library-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.library-bar-fill {
+  height: 100%;
+  background: #4dd0e1;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.library-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 4px 0 8px;
+}
+
+.library-btn.primary {
+  background: #fff;
+  color: #000;
+  width: 100%;
+}
+
+.library-btn.secondary {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.library-label {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 12px 0 8px;
+}
+
+.library-label:first-child {
+  margin-top: 0;
+}
+
+.library-seg {
+  width: 100%;
+}
+
+.library-seg button {
+  flex: 1;
+  padding: 8px 6px;
+  font-size: 13px;
+}
+
+.library-preview {
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.55;
+  margin-top: 8px;
+}
+
+.library-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.library-id {
+  flex: 1;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.85);
+  user-select: text;
+}
+
+.library-card a {
+  color: #4dd0e1;
 }
 
 /* ---------- dialog + snackbar ---------- */

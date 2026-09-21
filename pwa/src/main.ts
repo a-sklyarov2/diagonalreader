@@ -1,9 +1,10 @@
-/** App shell: camera ⇄ reader, Stripe return toasts, PWA wiring. */
+/** App shell: camera ⇄ reader, Library sheet, Stripe return toasts. */
 
 import { ApiError } from './api';
 import { Billing } from './billing';
 import { CameraView } from './camera';
 import { getUserId } from './identity';
+import { LibraryView } from './library';
 import { ReadingSession } from './session';
 import { ReaderView } from './reader';
 import { snackbar } from './ui';
@@ -47,6 +48,18 @@ async function boot(): Promise<void> {
 
   let camera: CameraView | null = null;
   let reader: ReaderView | null = null;
+  let library: LibraryView | null = null;
+
+  // The Library is a sheet over whichever view is live — closing
+  // returns to it, no navigation state lost.
+  const showLibrary = (): void => {
+    if (library) return;
+    library = new LibraryView(app, billing, userId, () => {
+      library?.destroy();
+      library = null;
+    });
+    library.mount();
+  };
 
   const showCamera = (): void => {
     reader?.destroy();
@@ -57,6 +70,7 @@ async function boot(): Promise<void> {
       session,
       billing,
       (_page, index) => showReader(index),
+      () => showLibrary(),
       {
         fetchFixture: async () => {
           const res = await fetch(FIXTURE_URL);
@@ -84,6 +98,7 @@ async function boot(): Promise<void> {
       index,
       () => showCamera(),
       () => showCamera(),
+      () => showLibrary(),
     );
     reader.mount();
   };
