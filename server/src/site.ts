@@ -5,8 +5,7 @@
  * GET /              → minimal landing page (PWA lives on app.*).
  */
 
-export const CONTACT_EMAIL = 'sklyarovaleksandar@gmail.com';
-export const EFFECTIVE_DATE = '20 September 2026';
+export const EFFECTIVE_DATE = '22 September 2026';
 
 export const privacyPolicyHtml = `<!doctype html>
 <html lang="en">
@@ -40,12 +39,14 @@ the on-device history in your browser (IndexedDB) until you delete them.</li>
 <li><strong>Anonymous browser identifier.</strong> The app generates a
 random identifier (a <code>uuid:</code> value in localStorage) to count
 your monthly page allowance and recognise an active subscription. It
-contains no name, email, or contact details. Clearing site data
-resets it.</li>
+contains no contact details; a purchase email is stored separately and
+only for subscribers. Clearing site data resets it.</li>
 <li><strong>Purchase information.</strong> Subscriptions are sold and
 billed by Stripe. We receive only the fact that a subscription is
 active (plus price and expiry timestamps) — never your payment
-details.</li>
+details. Subscribers' purchase email and a one-way hash of a recovery
+code are stored alongside the Stripe customer link; restoring moves
+access so exactly one device ID is active per subscription.</li>
 <li><strong>Page counters.</strong> Monthly and daily counters linked to
 your anonymous identifier are stored in our Cloudflare D1 database to
 enforce the 100-pages/month free allowance and the subscriber
@@ -53,9 +54,16 @@ guardrails (500/day, 10000/month).</li>
 </ul>
 
 <h2>What we do not collect</h2>
-<p>No names, emails, contacts, precise location, advertising
-identifiers, or analytics SDKs. The camera is used only when you tap
+<p>No contacts, precise location, advertising identifiers, or analytics
+SDKs. Your purchase email is kept only if you subscribe, solely to
+recover your subscription. The camera is used only when you tap
 the shutter; no photos are taken in the background.</p>
+
+<h2>Subscription recovery</h2>
+<p>Subscribers' purchase email and a one-way hash of a recovery code are
+stored alongside the Stripe customer link and used only to restore
+Unlimited on a new device. Restoring moves access: exactly one device
+ID is active per subscription.</p>
 
 <h2>Third parties</h2>
 <ul>
@@ -82,8 +90,10 @@ children under 13. No children's data is knowingly collected.</p>
 access, correction, or deletion of data linked to your browser
 identifier. See <a href="/data-deletion">data deletion</a> for the
 one-minute process: your on-device history deletes instantly in the
-app, and server records go on emailed request. Contact:
-<a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
+app, while server-side page counters reset every calendar month and
+subscription records disappear when the subscription expires. There
+is currently no support email address; a dedicated address for this
+domain will be listed here once available.</p>
 
 <h2>Changes</h2>
 <p>Material changes to this policy will be published here with a new
@@ -91,7 +101,7 @@ effective date. Continued use of the app after a change means you
 accept it.</p>
 
 <h2>Contact</h2>
-<p><a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a></p>
+<p>There is currently no public support email. A dedicated address for this domain will be listed here once available.</p>
 </body>
 </html>`;
 
@@ -115,16 +125,11 @@ your data takes two short steps:</p>
 <p>Open the app and tap the red bin on any summary to delete that
 page's photo and text immediately. Clearing the site's data removes
 whatever remains, including your anonymous browser identifier.</p>
-<h2>2. On our servers (by email)</h2>
-<p>Email <a href="mailto:${CONTACT_EMAIL}?subject=Data%20deletion">${CONTACT_EMAIL}</a>
-with subject <code>Data deletion</code> and include your
-<strong>User ID</strong> so we can find your records: in the app,
-<strong>long-press the page counter</strong> at the top of the camera
-screen, then Copy. We delete your monthly counters and any
-subscription record and confirm back within 30 days.</p>
-<p>Note: monthly page counters reset automatically, and subscription
-records disappear on their own when the subscription expires —
-emailing only hurries that along.</p>
+<h2>2. On our servers (automatic)</h2>
+<p>Nothing to send: monthly page counters reset on their own, and
+subscription records disappear when the subscription expires.
+Clearing your site data removes your anonymous browser identifier
+from the device.</p>
 </body>
 </html>`;
 

@@ -250,3 +250,36 @@ export async function deactivateSubscription(
     .bind(userId)
     .run();
 }
+
+/**
+ * Move a subscription from one device UID to another. Exactly one UID
+ * stays active: any rows already on the target are cleared first, and
+ * pending recovery rows for both UIDs are consumed. Usage rows stay
+ * put (fresh guardrails on the new device, still Stripe-bounded).
+ */
+export async function transferSubscription(
+  db: D1Db,
+  fromUserId: string,
+  toUserId: string,
+): Promise<void> {
+  await db
+    .prepare('DELETE FROM subscriptions WHERE user_id = ?')
+    .bind(toUserId)
+    .run();
+  await db
+    .prepare('DELETE FROM stripe_customers WHERE user_id = ?')
+    .bind(toUserId)
+    .run();
+  await db
+    .prepare('UPDATE subscriptions SET user_id = ? WHERE user_id = ?')
+    .bind(toUserId, fromUserId)
+    .run();
+  await db
+    .prepare('UPDATE stripe_customers SET user_id = ? WHERE user_id = ?')
+    .bind(toUserId, fromUserId)
+    .run();
+  await db
+    .prepare('DELETE FROM recovery_pending WHERE user_id IN (?, ?)')
+    .bind(fromUserId, toUserId)
+    .run();
+}

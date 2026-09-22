@@ -16,7 +16,7 @@ shell and the API (same-origin, no CORS).
 - **Server** (`server/`, `diagonal-api` worker): spends quota
   (100 free/month; subscribers 500/day + 10k/month guardrails), builds
   the prompt, calls OpenRouter with the secret key, streams SSE back.
-  `GET /health` for status; `POST /stripe/checkout|portal`,
+  `GET /health` for status; `POST /stripe/checkout|portal|recovery-code|recover`,
   `GET /stripe/status`, `POST /stripe/webhook` for billing.
 
 ## PWA dev
@@ -63,3 +63,20 @@ printf '%s' "$WHSEC" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
 4. Local webhook test: `stripe listen --forward-to
    127.0.0.1:8787/stripe/webhook` while deploying with test-mode keys.
    No publishable key needed (no Stripe.js; redirect-to-URL flow).
+5. In Dashboard Settings → Business → Customer emails, enable
+   Successful payments: Stripe sends the receipt email whose linked
+   invoice PDF carries the recovery-code footer (lost-device backup).
+6. Apply the recovery migration everywhere the schema runs:
+   `npx wrangler d1 migrations apply diagonal --local` and `--remote`
+   (creates `recovery_pending`, `recovery_links`,
+   `recovery_attempts`, plus `stripe_customers.subscription_id`).
+
+## Subscription recovery (no login, no outbound email)
+Checkout mints a `XXXX-XXXX-XXXX` code: shown in-app before the Stripe
+redirect, repeated after `?checkout=success`, and printed in the Stripe
+invoice footer. The webhook links the Stripe purchase email to the
+paying UID (hash only for the code). On a new/wiped device, Library →
+`Already subscribed? Restore access` takes purchase email + code and
+moves Unlimited to the current UID (exactly one active UID; the old
+code rotates on every success). While still subscribed, Library →
+`Recovery code` mints a fresh code for the current device.

@@ -7,8 +7,10 @@ import { getUserId } from './identity';
 import { LibraryView } from './library';
 import { ReadingSession } from './session';
 import { ReaderView } from './reader';
-import { snackbar } from './ui';
+import { showDialog, snackbar } from './ui';
 import './styles.css';
+
+const PENDING_RECOVERY_KEY = 'diagonal_pending_recovery';
 
 const FIXTURE_URL = 'e2e-fixtures/page1.jpg';
 
@@ -44,6 +46,20 @@ async function boot(): Promise<void> {
         : window.location.pathname;
     window.history.replaceState(null, '', clean);
     await billing.refreshQuota();
+    if (toast.startsWith('Subscription active')) {
+      let stashed: string | null = null;
+      try {
+        stashed = localStorage.getItem(PENDING_RECOVERY_KEY);
+        localStorage.removeItem(PENDING_RECOVERY_KEY);
+      } catch {
+        stashed = null;
+      }
+      if (stashed) {
+        showDialog('Subscription active', [stashed, 'Write it down — it is also on your Stripe invoice.'], [
+          { label: 'Done' },
+        ]);
+      }
+    }
   }
 
   let camera: CameraView | null = null;

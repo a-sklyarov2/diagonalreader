@@ -103,7 +103,9 @@ describe('fetch router', () => {
     const policyText = await policy.text();
     expect(policyText).toContain('Privacy Policy — Diagonal Reader');
     expect(policyText).toContain('not stored on our servers');
-    expect(policyText).toContain('sklyarovaleksandar@gmail.com');
+    expect(policyText).toContain('recovery code');
+    expect(policyText).not.toContain('mailto:');
+    expect(policyText).toContain('currently no support email');
 
     const landing = await worker.fetch(
       new Request('https://diagonalreader.com/'),
@@ -120,8 +122,8 @@ describe('fetch router', () => {
     );
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(text).toContain('long-press the page counter');
-    expect(text).toContain('sklyarovaleksandar@gmail.com');
+    expect(text).toContain('(automatic)');
+    expect(text).not.toContain('mailto:');
   });
 
   it('summarizes without any auth header', async () => {

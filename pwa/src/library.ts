@@ -9,7 +9,7 @@
  * browser (target _blank is unreliable inside installed standalone).
  */
 
-import { openPortal, startCheckout } from './api';
+import { fetchRecoveryCode, openPortal, recoverSubscription, requestCheckout } from './api';
 import type { Billing } from './billing';
 import {
   getTextSize,
@@ -20,7 +20,9 @@ import {
   TEXT_SIZES,
 } from './prefs';
 import type { TextSize, Voice } from './prefs';
-import { snackbar } from './ui';
+import { showDialog, snackbar } from './ui';
+
+const PENDING_RECOVERY_KEY = 'diagonal_pending_recovery';
 
 function nextResetLabel(month: string): string {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
@@ -75,12 +77,104 @@ export class LibraryView {
 
   private async subscribe(): Promise<void> {
     try {
-      await startCheckout(this.userId);
+      const { url, recoveryCode } = await requestCheckout(this.userId);
+      try {
+        localStorage.setItem(PENDING_RECOVERY_KEY, recoveryCode);
+      } catch {
+        // Private mode: the success screen just skips the save-again copy.
+      }
+      showDialog(
+        'Recovery code',
+        [recoveryCode, 'Write it down — it is also on your Stripe invoice.'],
+        [
+          { label: 'Cancel' },
+          {
+            label: 'Continue',
+            onClick: () => {
+              window.location.href = url;
+            },
+          },
+        ],
+      );
     } catch (e) {
-      const msg = e instanceof Error ? e.message : `${e}`;
-      if (msg.startsWith('redirecting')) return;
-      snackbar(msg);
+      snackbar(e instanceof Error ? e.message : `${e}`);
     }
+  }
+
+  private async showMintedCode(): Promise<void> {
+    try {
+      const { recoveryCode } = await fetchRecoveryCode(this.userId);
+      showDialog('Recovery code', [recoveryCode], [
+        {
+          label: 'Copy',
+          onClick: () => {
+            void navigator.clipboard
+              ?.writeText(recoveryCode)
+              .catch(() => undefined);
+          },
+        },
+        { label: 'Done' },
+      ]);
+    } catch (e) {
+      snackbar(e instanceof Error ? e.message : `${e}`);
+    }
+  }
+
+  private openRestoreDialog(): void {
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    const box = document.createElement('div');
+    box.className = 'dialog';
+    box.setAttribute('role', 'dialog');
+    const heading = document.createElement('h2');
+    heading.textContent = 'Restore access';
+    const email = document.createElement('input');
+    email.className = 'library-input';
+    email.type = 'email';
+    email.placeholder = 'Purchase email';
+    email.autocomplete = 'email';
+    const code = document.createElement('input');
+    code.className = 'library-input';
+    code.type = 'text';
+    code.placeholder = 'Recovery code';
+    code.autocomplete = 'one-time-code';
+    const row = document.createElement('div');
+    row.className = 'dialog-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'dialog-btn';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => overlay.remove());
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'dialog-btn';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => {
+      void (async () => {
+        try {
+          const { recoveryCode } = await recoverSubscription(
+            email.value,
+            code.value,
+            this.userId,
+          );
+          overlay.remove();
+          showDialog('Subscription restored', [
+            'Unlimited is active on this device.',
+            `New recovery code: ${recoveryCode} — save it; the old code no longer works.`,
+          ], [{ label: 'Done' }]);
+          await this.billing.refreshQuota();
+        } catch (e) {
+          snackbar(e instanceof Error ? e.message : `${e}`);
+        }
+      })();
+    });
+    row.append(cancel, restore);
+    box.append(heading, email, code, row);
+    overlay.appendChild(box);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
   }
 
   private async manage(): Promise<void> {
@@ -367,7 +461,13 @@ export class LibraryView {
     const note = document.createElement('p');
     note.className = 'library-muted';
     note.textContent = 'Cancel anytime in the portal.';
-    wrap.append(title, p, cta, note);
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'library-btn secondary';
+    restore.dataset.testid = 'libraryRestore';
+    restore.textContent = 'Already subscribed? Restore access';
+    restore.addEventListener('click', () => this.openRestoreDialog());
+    wrap.append(title, p, cta, note, restore);
     return wrap;
   }
 
@@ -382,11 +482,17 @@ export class LibraryView {
     manage.dataset.testid = 'libraryManage';
     manage.textContent = 'Manage subscription';
     manage.addEventListener('click', () => void this.manage());
+    const codeBtn = document.createElement('button');
+    codeBtn.type = 'button';
+    codeBtn.className = 'library-btn secondary';
+    codeBtn.dataset.testid = 'libraryRecoveryCode';
+    codeBtn.textContent = 'Recovery code';
+    codeBtn.addEventListener('click', () => void this.showMintedCode());
     const note = document.createElement('p');
     note.className = 'library-muted';
     note.textContent =
       'Cancel anytime — access runs to the end of the paid period.';
-    wrap.append(p, manage, note);
+    wrap.append(p, manage, codeBtn, note);
     return wrap;
   }
 

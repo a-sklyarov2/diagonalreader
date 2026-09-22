@@ -6,8 +6,10 @@
  * check keeps the Worker dependency-free.
  *
  * Routes (wired in index.ts):
- *   POST /stripe/checkout { userId } → { url } (hosted Checkout page)
+ *   POST /stripe/checkout { userId } → { url, recoveryCode } (hosted Checkout page)
  *   POST /stripe/portal   { userId } → { url } (billing portal)
+ *   POST /stripe/recovery-code { userId, email? } → { recoveryCode } (mint while subscribed)
+ *   POST /stripe/recover { email, code, newUserId } → { recovered, recoveryCode } (restore on new device)
  *   POST /stripe/webhook (Stripe-Signature verified) → { received: true }
  *
  * Access model: checkout completion (or an active/trialing
@@ -23,6 +25,8 @@
 import {
   activateSubscription,
   deactivateSubscription,
+  getSubscription,
+  transferSubscription,
   type D1Db,
 } from './quota';
 
@@ -282,9 +286,142 @@ function eventObject(event: unknown): unknown {
   return null;
 }
 
+/** Purchase emails are matched case-insensitively (SQLite PKs are not). */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/** Recovery codes are shown grouped but entered freely. */
+export function normalizeCode(code: string): string {
+  return code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+const RECOVERY_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+/** 12 unambiguous chars (~60 bits), displayed XXXX-XXXX-XXXX. */
+export function newRecoveryCode(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  let raw = '';
+  for (let i = 0; i < bytes.length; i++) {
+    raw += RECOVERY_ALPHABET[bytes[i] % RECOVERY_ALPHABET.length];
+  }
+  return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+/** One-way hash stored in D1; plaintext only ever lives in Stripe metadata/invoice. */
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+/** Link email → UID with the checkout hash, or a fresh one for legacy events. Returns the normalized email. */
+async function linkRecoveryEmail(
+  db: D1Db,
+  email: string,
+  userId: string,
+): Promise<string | null> {
+  const emailNorm = normalizeEmail(email);
+  if (emailNorm === '') return null;
+  const pendingRow = await db
+    .prepare('SELECT recovery_hash FROM recovery_pending WHERE user_id = ?')
+    .bind(userId)
+    .first<{ recovery_hash: string }>();
+  const linkHash =
+    pendingRow?.recovery_hash ??
+    (await sha256Hex(normalizeCode(newRecoveryCode())));
+  await db
+    .prepare(
+      'INSERT INTO recovery_links (email, user_id, recovery_hash) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET user_id = excluded.user_id, recovery_hash = excluded.recovery_hash, updated_at = CURRENT_TIMESTAMP',
+    )
+    .bind(emailNorm, userId, linkHash)
+    .run();
+  await db
+    .prepare('DELETE FROM recovery_pending WHERE user_id IN (?, ?)')
+    .bind(userId, userId)
+    .run();
+  return emailNorm;
+}
+
+/** Normalized email currently linked to this UID, if any. */
+async function recoveryEmailForUser(
+  db: D1Db,
+  userId: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT email FROM recovery_links WHERE user_id = ?')
+    .bind(userId)
+    .first<{ email: string }>();
+  return row?.email ?? null;
+}
+
 /**
- * POST /stripe/checkout { userId } → { url }. The PWA redirects to the
- * hosted page; no publishable key or client SDK needed.
+ * Late email arrival: if this UID still has no link row, pull the
+ * customer email from Stripe once and link it. Best-effort — a miss
+ * just waits for the next event or the recovery-code endpoint.
+ */
+async function backfillRecoveryLink(
+  env: StripeEnv,
+  db: D1Db,
+  customerId: string,
+  userId: string,
+): Promise<void> {
+  if (customerId === '') return;
+  if (await recoveryEmailForUser(db, userId)) return;
+  let email = '';
+  try {
+    const customer = await stripeApi(env, 'GET', `/customers/${customerId}`);
+    if (
+      customer.status === 200 &&
+      customer.json !== null &&
+      typeof customer.json === 'object' &&
+      'email' in customer.json &&
+      typeof customer.json.email === 'string' &&
+      normalizeEmail(customer.json.email) !== ''
+    ) {
+      email = customer.json.email.trim();
+    }
+  } catch {
+    // Best-effort: a later event or the recovery-code endpoint retries.
+    return;
+  }
+  if (email === '') return;
+  if (await recoveryEmailForUser(db, userId)) return;
+  await linkRecoveryEmail(db, email, userId);
+}
+
+/** Checkout-session buyer email, trying the likely fields in order. */
+function sessionEmail(obj: unknown): string {
+  if (obj === null || typeof obj !== 'object') return '';
+  if ('customer_details' in obj) {
+    const details = obj.customer_details;
+    if (
+      details !== null &&
+      typeof details === 'object' &&
+      'email' in details &&
+      typeof details.email === 'string'
+    ) {
+      return details.email;
+    }
+  }
+  if ('customer_email' in obj && typeof obj.customer_email === 'string') {
+    return obj.customer_email;
+  }
+  return '';
+}
+
+/**
+ * POST /stripe/checkout { userId } → { url, recoveryCode }. The PWA shows
+ * the code before redirecting; the same code also lands on the Stripe
+ * invoice footer (receipt email → invoice PDF) for lost-device backup.
  */
 export async function handleCheckout(
   request: Request,
@@ -301,21 +438,49 @@ export async function handleCheckout(
   if (!price) {
     return misconfigured('missing STRIPE_PRICE_MONTHLY');
   }
-  const params = new URLSearchParams();
-  params.set('mode', 'subscription');
-  params.set('line_items[0][price]', price);
-  params.set('line_items[0][quantity]', '1');
-  params.set('client_reference_id', userId);
-  params.set('metadata[userId]', userId);
-  params.set('success_url', SUCCESS_URL);
-  params.set('cancel_url', CANCEL_URL);
-  const result = await stripeApi(env, 'POST', '/checkout/sessions', params);
+  const recoveryCode = newRecoveryCode();
+  if (env.DB) {
+    await env.DB
+      .prepare(
+        'INSERT INTO recovery_pending (user_id, recovery_hash) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET recovery_hash = excluded.recovery_hash, created_at = CURRENT_TIMESTAMP',
+      )
+      .bind(userId, await sha256Hex(normalizeCode(recoveryCode)))
+      .run();
+  }
+  const footer = `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`;
+  const withInvoice = new URLSearchParams();
+  withInvoice.set('mode', 'subscription');
+  withInvoice.set('line_items[0][price]', price);
+  withInvoice.set('line_items[0][quantity]', '1');
+  withInvoice.set('client_reference_id', userId);
+  withInvoice.set('metadata[userId]', userId);
+  withInvoice.set('subscription_data[metadata][recovery_code]', recoveryCode);
+  withInvoice.set('subscription_data[invoice_settings][footer]', footer);
+  withInvoice.set('success_url', SUCCESS_URL);
+  withInvoice.set('cancel_url', CANCEL_URL);
+  let result = await stripeApi(env, 'POST', '/checkout/sessions', withInvoice);
+  if (
+    result.status >= 400 &&
+    result.status < 500 &&
+    /invoice_settings/i.test(result.text)
+  ) {
+    const metadataOnly = new URLSearchParams();
+    metadataOnly.set('mode', 'subscription');
+    metadataOnly.set('line_items[0][price]', price);
+    metadataOnly.set('line_items[0][quantity]', '1');
+    metadataOnly.set('client_reference_id', userId);
+    metadataOnly.set('metadata[userId]', userId);
+    metadataOnly.set('subscription_data[metadata][recovery_code]', recoveryCode);
+    metadataOnly.set('success_url', SUCCESS_URL);
+    metadataOnly.set('cancel_url', CANCEL_URL);
+    result = await stripeApi(env, 'POST', '/checkout/sessions', metadataOnly);
+  }
   const url = responseUrl(result.json);
   if (result.status !== 200 || url === null) {
     const error = `stripe ${result.status}: ${excerpt(result.text)}`;
     return Response.json({ error }, { status: 502 });
   }
-  return Response.json({ url });
+  return Response.json({ url, recoveryCode });
 }
 
 /** POST /stripe/portal { userId } → { url }. 404 when never subscribed. */
@@ -456,11 +621,39 @@ async function completeCheckout(
   if (customerId !== '') {
     await db
       .prepare(
-        'INSERT INTO stripe_customers (user_id, customer_id) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET customer_id = excluded.customer_id',
+        'INSERT INTO stripe_customers (user_id, customer_id, subscription_id) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET customer_id = excluded.customer_id, subscription_id = excluded.subscription_id',
       )
-      .bind(userId, customerId)
+      .bind(userId, customerId, subscriptionId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        'UPDATE stripe_customers SET subscription_id = ? WHERE user_id = ?',
+      )
+      .bind(subscriptionId, userId)
       .run();
   }
+  let email = sessionEmail(obj).trim();
+  if (email === '' && customerId !== '') {
+    try {
+      const customer = await stripeApi(env, 'GET', `/customers/${customerId}`);
+      if (
+        customer.status === 200 &&
+        customer.json !== null &&
+        typeof customer.json === 'object' &&
+        'email' in customer.json &&
+        typeof customer.json.email === 'string'
+      ) {
+        email = customer.json.email.trim();
+      }
+    } catch {
+      // Test doubles (and link-less legacy webhooks) may not stub the
+      // customer GET; activation still succeeds and a later event
+      // backfills the email.
+      email = '';
+    }
+  }
+  await linkRecoveryEmail(db, email, userId);
   return Response.json({ received: true });
 }
 
@@ -496,6 +689,7 @@ async function subscriptionUpdated(
     const fallbackPrice = (env.STRIPE_PRICE_MONTHLY ?? '').trim();
     const priceId = subscriptionPriceId(obj, fallbackPrice);
     await activateSubscription(db, link.userId, priceId, periodEnd);
+    await backfillRecoveryLink(env, db, link.customerId, link.userId);
   } else {
     // Past-due/unpaid/canceled: keep the row so paid time remains, but
     // pin expiry to the last paid period end.
@@ -522,6 +716,221 @@ async function subscriptionDeleted(
     .first<{ user_id: string }>();
   if (row) await deactivateSubscription(db, row.user_id);
   return Response.json({ received: true });
+}
+
+/** Best-effort Stripe copy of the rotated code; in-app return is authoritative. */
+async function pushRecoveryCodeToStripe(
+  env: StripeEnv,
+  db: D1Db,
+  userId: string,
+  recoveryCode: string,
+): Promise<void> {
+  const row = await db
+    .prepare('SELECT customer_id, subscription_id FROM stripe_customers WHERE user_id = ?')
+    .bind(userId)
+    .first<{ customer_id: string; subscription_id: string | null }>();
+  const subscriptionId = row?.subscription_id ?? '';
+  if (subscriptionId === '') return;
+  const params = new URLSearchParams();
+  params.set('metadata[recovery_code]', recoveryCode);
+  params.set(
+    'invoice_settings[footer]',
+    `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`,
+  );
+  try {
+    await stripeApi(env, 'POST', `/subscriptions/${subscriptionId}`, params);
+  } catch {
+    // Rotation already succeeded in D1; the invoice copy is superseded.
+  }
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const body: unknown = await request.json();
+    if (body !== null && typeof body === 'object') {
+      return body as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to null below.
+  }
+  return null;
+}
+
+/**
+ * POST /stripe/recovery-code { userId, email? } → { recoveryCode }.
+ * Mints (rotates) the one-time-display code while the subscription is
+ * live. With `email`, first links that address to this UID.
+ */
+export async function handleRecoveryCode(
+  request: Request,
+  env: StripeEnv,
+): Promise<Response> {
+  const body = await readJson(request);
+  const userId =
+    body !== null && typeof body.userId === 'string'
+      ? body.userId.trim()
+      : '';
+  if (userId === '') {
+    return Response.json({ error: 'missing userId' }, { status: 400 });
+  }
+  if (!env.STRIPE_SECRET_KEY) {
+    return misconfigured('missing STRIPE_SECRET_KEY');
+  }
+  if (!env.DB) {
+    return misconfigured('missing DB binding');
+  }
+  const db = env.DB;
+  const live = await getSubscription(db, userId, Date.now());
+  if (!live) {
+    return Response.json(
+      { error: 'no subscription found' },
+      { status: 404 },
+    );
+  }
+  const emailParam =
+    body !== null && typeof body.email === 'string' ? body.email : '';
+  let targetEmail: string | null = null;
+  if (emailParam.trim() !== '') {
+    targetEmail = await linkRecoveryEmail(db, emailParam, userId);
+  } else {
+    targetEmail = await recoveryEmailForUser(db, userId);
+  }
+  if (targetEmail === null) {
+    return Response.json({ error: 'no email linked' }, { status: 404 });
+  }
+  const recoveryCode = newRecoveryCode();
+  const hash = await sha256Hex(normalizeCode(recoveryCode));
+  await db
+    .prepare(
+      'INSERT INTO recovery_links (email, user_id, recovery_hash) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET user_id = excluded.user_id, recovery_hash = excluded.recovery_hash, updated_at = CURRENT_TIMESTAMP',
+    )
+    .bind(targetEmail, userId, hash)
+    .run();
+  await pushRecoveryCodeToStripe(env, db, userId, recoveryCode);
+  return Response.json({ recoveryCode });
+}
+
+const MAX_RECOVERY_FAILS = 10;
+const RECOVERY_WINDOW_SEC = 3600;
+
+async function recoveryThrottled(
+  db: D1Db,
+  email: string,
+  nowSec: number,
+): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT fails, window_start FROM recovery_attempts WHERE email = ?')
+    .bind(email)
+    .first<{ fails: number; window_start: number }>();
+  if (!row) return false;
+  if (nowSec - row.window_start >= RECOVERY_WINDOW_SEC) return false;
+  return row.fails >= MAX_RECOVERY_FAILS;
+}
+
+async function recordRecoveryFail(
+  db: D1Db,
+  email: string,
+  nowSec: number,
+): Promise<void> {
+  const row = await db
+    .prepare('SELECT fails, window_start FROM recovery_attempts WHERE email = ?')
+    .bind(email)
+    .first<{ fails: number; window_start: number }>();
+  if (!row || nowSec - row.window_start >= RECOVERY_WINDOW_SEC) {
+    await db
+      .prepare(
+        'INSERT INTO recovery_attempts (email, fails, window_start) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET fails = excluded.fails, window_start = excluded.window_start',
+      )
+      .bind(email, 1, nowSec)
+      .run();
+    return;
+  }
+  await db
+    .prepare(
+      'INSERT INTO recovery_attempts (email, fails, window_start) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET fails = excluded.fails, window_start = excluded.window_start',
+    )
+    .bind(email, row.fails + 1, row.window_start)
+    .run();
+}
+
+/**
+ * POST /stripe/recover { email, code, newUserId } → { recovered, recoveryCode }.
+ * Moves the subscription to the caller's UID; exactly one UID stays
+ * active. Returns a fresh code (old one stops working).
+ */
+export async function handleRecover(
+  request: Request,
+  env: StripeEnv,
+): Promise<Response> {
+  const body = await readJson(request);
+  const emailRaw =
+    body !== null && typeof body.email === 'string' ? body.email : '';
+  const codeRaw =
+    body !== null && typeof body.code === 'string' ? body.code : '';
+  const newUserId =
+    body !== null && typeof body.newUserId === 'string'
+      ? body.newUserId.trim()
+      : '';
+  if (emailRaw.trim() === '' || codeRaw.trim() === '' || newUserId === '') {
+    return Response.json({ error: 'missing email, code, or newUserId' }, { status: 400 });
+  }
+  const email = normalizeEmail(emailRaw);
+  if (!email.includes('@')) {
+    return Response.json({ error: 'missing email, code, or newUserId' }, { status: 400 });
+  }
+  if (!env.DB) {
+    return misconfigured('missing DB binding');
+  }
+  const db = env.DB;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (await recoveryThrottled(db, email, nowSec)) {
+    return Response.json(
+      { error: 'too many attempts, try again later' },
+      { status: 429 },
+    );
+  }
+  const link = await db
+    .prepare('SELECT user_id, recovery_hash FROM recovery_links WHERE email = ?')
+    .bind(email)
+    .first<{ user_id: string; recovery_hash: string }>();
+  const candidateHash = await sha256Hex(normalizeCode(codeRaw));
+  if (!link || link.recovery_hash !== candidateHash) {
+    await recordRecoveryFail(db, email, nowSec);
+    return Response.json(
+      { error: 'invalid email or code' },
+      { status: 404 },
+    );
+  }
+  const live = await getSubscription(db, link.user_id, Date.now());
+  if (!live) {
+    await recordRecoveryFail(db, email, nowSec);
+    return Response.json(
+      { error: 'subscription expired' },
+      { status: 410 },
+    );
+  }
+  const freshCode = newRecoveryCode();
+  const freshHash = await sha256Hex(normalizeCode(freshCode));
+  if (link.user_id !== newUserId) {
+    await transferSubscription(db, link.user_id, newUserId);
+  } else {
+    await db
+      .prepare('DELETE FROM recovery_pending WHERE user_id IN (?, ?)')
+      .bind(link.user_id, newUserId)
+      .run();
+  }
+  await db
+    .prepare(
+      'UPDATE recovery_links SET user_id = ?, recovery_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?',
+    )
+    .bind(newUserId, freshHash, email)
+    .run();
+  await db
+    .prepare('DELETE FROM recovery_attempts WHERE email = ?')
+    .bind(email)
+    .run();
+  await pushRecoveryCodeToStripe(env, db, newUserId, freshCode);
+  return Response.json({ recovered: true, recoveryCode: freshCode });
 }
 
 /**
