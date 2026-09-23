@@ -13,8 +13,7 @@
  * GET /stripe/status?user=<id> → same quota view (PWA pill source).
  * POST /stripe/checkout { userId } → { url } (hosted Checkout page).
  * POST /stripe/portal { userId } → { url } (billing portal).
- * POST /stripe/recovery-code { userId, email?, rotate? } → { recoveryCode } (legacy code path).
- * POST /stripe/recover { email, invoiceNumber?, code?, newUserId } → { recovered: true } (restore on new device).
+ * POST /stripe/recover { email, invoiceNumber, newUserId } → { recovered: true } (restore on new device).
  * POST /stripe/webhook (Stripe-signed) → activates/deactivates access.
  * GET /health → { ok: true, model }
  * GET /privacy-policy, GET /data-deletion, GET / → static pages.
@@ -45,7 +44,6 @@ import {
   handleCheckout,
   handlePortal,
   handleRecover,
-  handleRecoveryCode,
   handleStripeWebhook,
   type StripeEnv,
 } from './stripe';
@@ -101,9 +99,6 @@ export default {
     }
     if (request.method === 'POST' && url.pathname === '/stripe/portal') {
       return handlePortal(request, env);
-    }
-    if (request.method === 'POST' && url.pathname === '/stripe/recovery-code') {
-      return handleRecoveryCode(request, env);
     }
     if (request.method === 'POST' && url.pathname === '/stripe/recover') {
       return handleRecover(request, env);

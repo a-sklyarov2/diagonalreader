@@ -16,16 +16,12 @@ import type { Env } from '../src/summarize';
 /** In-memory D1 covering the statements quota.ts / stripe.ts issue. */
 interface FakeDbState {
   db: D1Db;
-  links: Map<string, { user_id: string; recovery_hash: string }>;
   invoices: Map<string, { email: string; user_id: string }>;
 }
 function makeFakeDb() {
   const subs = new Map<string, { product_id: string; expires_at: number }>();
   const usage = new Map<string, { free_used: number; paid_used: number }>();
   const customers = new Map<string, string>();
-  const customerSubs = new Map<string, string>();
-  const pending = new Map<string, string>();
-  const links = new Map<string, { user_id: string; recovery_hash: string }>();
   const invoices = new Map<string, { email: string; user_id: string }>();
   const attempts = new Map<string, { fails: number; window_start: number }>();
   const key = (u: string, m: string, d: string) => `${u}|${m}|${d}`;
@@ -61,12 +57,6 @@ function makeFakeDb() {
             );
             return (row ? { paid_used: row.paid_used } : null) as T | null;
           }
-          if (q.startsWith('SELECT customer_id, subscription_id FROM stripe_customers')) {
-            const userId = bound[0] as string;
-            const customerId = customers.get(userId);
-            if (!customerId) return null as T | null;
-            return { customer_id: customerId, subscription_id: customerSubs.get(userId) ?? null } as T;
-          }
           if (q.startsWith('SELECT customer_id FROM stripe_customers')) {
             const customerId = customers.get(bound[0] as string);
             return (
@@ -81,21 +71,6 @@ function makeFakeDb() {
               }
             }
             return null as T | null;
-          }
-          if (q.startsWith('SELECT recovery_hash FROM recovery_pending')) {
-            const hash = pending.get(bound[0] as string);
-            return (hash ? { recovery_hash: hash } : null) as T | null;
-          }
-          if (q.startsWith('SELECT user_id, recovery_hash FROM recovery_links')) {
-            const row = links.get(bound[0] as string);
-            return (row ? { ...row } : null) as T | null;
-          }
-          if (q.startsWith('SELECT email FROM recovery_links')) {
-            const wanted = bound[0] as string;
-            for (const [email, row] of links) {
-              if (row.user_id === wanted) return { email } as unknown as T | null;
-            }
-            return null;
           }
           if (q.startsWith('SELECT email, user_id FROM recovery_invoices')) {
             const row = invoices.get(bound[0] as string);
@@ -134,14 +109,6 @@ function makeFakeDb() {
           }
           if (q.startsWith('INSERT INTO stripe_customers')) {
             customers.set(bound[0] as string, bound[1] as string);
-            if (q.includes('subscription_id') && bound[2] !== undefined) {
-              customerSubs.set(bound[0] as string, bound[2] as string);
-            }
-            return {};
-          }
-          if (q.startsWith('UPDATE stripe_customers SET subscription_id')) {
-            customers.set(bound[1] as string, customers.get(bound[1] as string) ?? (bound[0] as string));
-            customerSubs.set(bound[1] as string, bound[0] as string);
             return {};
           }
           if (q.startsWith('UPDATE stripe_customers SET user_id')) {
@@ -151,37 +118,11 @@ function makeFakeDb() {
             if (customerId !== undefined) {
               customers.delete(oldUser);
               customers.set(newUser, customerId);
-              const subId = customerSubs.get(oldUser);
-              customerSubs.delete(oldUser);
-              if (subId !== undefined) customerSubs.set(newUser, subId);
             }
             return {};
           }
           if (q.startsWith('DELETE FROM stripe_customers')) {
             customers.delete(bound[0] as string);
-            customerSubs.delete(bound[0] as string);
-            return {};
-          }
-          if (q.startsWith('INSERT INTO recovery_pending')) {
-            pending.set(bound[0] as string, bound[1] as string);
-            return {};
-          }
-          if (q.startsWith('DELETE FROM recovery_pending')) {
-            pending.delete(bound[0] as string);
-            pending.delete(bound[1] as string);
-            return {};
-          }
-          if (q.startsWith('INSERT INTO recovery_links')) {
-            links.set(bound[0] as string, { user_id: bound[1] as string, recovery_hash: bound[2] as string });
-            return {};
-          }
-          if (q.startsWith('UPDATE recovery_links SET user_id')) {
-            const email = bound[2] as string;
-            const row = links.get(email);
-            if (row) {
-              row.user_id = bound[0] as string;
-              row.recovery_hash = bound[1] as string;
-            }
             return {};
           }
           if (q.startsWith('INSERT INTO recovery_invoices')) {
@@ -231,7 +172,7 @@ function makeFakeDb() {
       return stmt;
     },
   };
-  return { db, subs, customers, pending, links, invoices, attempts };
+  return { db, subs, customers, invoices, attempts };
 }
 
 const STRIPE_SECRET = 'sk-test';

@@ -66,9 +66,8 @@ printf '%s' "$WHSEC" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
 5. In Dashboard Settings → Business → Customer emails, enable
    Successful payments so buyers keep getting payment emails (any
    invoice/receipt number in them restores access).
-6. Apply the recovery migrations everywhere the schema runs:
-   `npx wrangler d1 migrations apply diagonal --local` and `--remote`
-   (`0004` recovery codes, `0005` `recovery_invoices`).
+6. Apply the recovery migration everywhere the schema runs:
+   `npx wrangler d1 migrations apply diagonal --local` and `--remote`.
 
 ## Subscription recovery (no login, no outbound email)
 The webhook stores every paid invoice/receipt number against the paying

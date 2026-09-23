@@ -98,26 +98,18 @@ async function redirectTo(url: string): Promise<never> {
   throw new Error(`redirecting to ${url}`);
 }
 
-export interface CheckoutResult {
-  url: string;
-  recoveryCode: string;
-}
-
-export async function requestCheckout(userId: string): Promise<CheckoutResult> {
+export async function requestCheckout(userId: string): Promise<{ url: string }> {
   const res = await fetch('/stripe/checkout', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ userId }),
   });
   if (!res.ok) await throwForStatus(res);
-  const body = (await res.json()) as { url?: unknown; recoveryCode?: unknown };
+  const body = (await res.json()) as { url?: unknown };
   if (typeof body.url !== 'string' || body.url === '') {
     throw new Error('checkout failed: missing url');
   }
-  if (typeof body.recoveryCode !== 'string' || body.recoveryCode === '') {
-    throw new Error('checkout failed: missing recovery code');
-  }
-  return { url: body.url, recoveryCode: body.recoveryCode };
+  return { url: body.url };
 }
 
 export async function recoverSubscription(
