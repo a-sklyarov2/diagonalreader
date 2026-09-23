@@ -7,11 +7,8 @@ import { getUserId } from './identity';
 import { LibraryView } from './library';
 import { ReadingSession } from './session';
 import { ReaderView } from './reader';
-import { showDialog, snackbar } from './ui';
+import { snackbar } from './ui';
 import './styles.css';
-
-const PENDING_RECOVERY_KEY = 'diagonal_pending_recovery';
-
 const FIXTURE_URL = 'e2e-fixtures/page1.jpg';
 
 function toastForCheckout(params: URLSearchParams): string | null {
@@ -46,28 +43,7 @@ async function boot(): Promise<void> {
         : window.location.pathname;
     window.history.replaceState(null, '', clean);
     await billing.refreshQuota();
-    if (toast.startsWith('Subscription active')) {
-      let stashed: string | null = null;
-      try {
-        stashed = localStorage.getItem(PENDING_RECOVERY_KEY);
-        localStorage.removeItem(PENDING_RECOVERY_KEY);
-      } catch {
-        stashed = null;
-      }
-      if (stashed) {
-        showDialog(
-          'Subscription active',
-          [
-            `Your recovery code: ${stashed}`,
-            'Save it somewhere safe — email it to yourself.',
-            'You can also find it later in the Library, or at the bottom of your purchase confirmation email.',
-          ],
-          [{ label: 'Done' }],
-        );
-      }
-    }
   }
-
   let camera: CameraView | null = null;
   let reader: ReaderView | null = null;
   let library: LibraryView | null = null;

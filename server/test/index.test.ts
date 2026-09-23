@@ -103,7 +103,7 @@ describe('fetch router', () => {
     const policyText = await policy.text();
     expect(policyText).toContain('Privacy Policy — Diagonal Reader');
     expect(policyText).toContain('not stored on our servers');
-    expect(policyText).toContain('recovery code');
+    expect(policyText).toContain('invoice/receipt numbers');
     expect(policyText).not.toContain('mailto:');
     expect(policyText).toContain('currently no support email');
 

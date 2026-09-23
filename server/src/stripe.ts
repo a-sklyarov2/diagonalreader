@@ -6,10 +6,10 @@
  * check keeps the Worker dependency-free.
  *
  * Routes (wired in index.ts):
- *   POST /stripe/checkout { userId } → { url, recoveryCode } (hosted Checkout page)
+ *   POST /stripe/checkout { userId } → { url } (hosted Checkout page)
  *   POST /stripe/portal   { userId } → { url } (billing portal)
- *   POST /stripe/recovery-code { userId, email? } → { recoveryCode } (mint while subscribed)
- *   POST /stripe/recover { email, code, newUserId } → { recovered, recoveryCode } (restore on new device)
+ *   POST /stripe/recovery-code { userId, email?, rotate? } → { recoveryCode } (legacy code path)
+ *   POST /stripe/recover { email, invoiceNumber?, code?, newUserId } → { recovered: true } (restore on new device)
  *   POST /stripe/webhook (Stripe-Signature verified) → { received: true }
  *
  * Access model: checkout completion (or an active/trialing
@@ -188,21 +188,27 @@ function invoiceRef(obj: unknown): string {
   return '';
 }
 
-/** Recovery code Stripe stored on the subscription metadata, if any. */
-function checkoutCodeFromSubscription(sub: unknown): string | null {
-  if (sub !== null && typeof sub === 'object' && 'metadata' in sub) {
-    const meta = sub.metadata;
-    if (
-      meta !== null &&
-      typeof meta === 'object' &&
-      'recovery_code' in meta &&
-      typeof meta.recovery_code === 'string' &&
-      meta.recovery_code.trim() !== ''
-    ) {
-      return meta.recovery_code.trim();
-    }
+/** First-invoice id off the subscription (`latest_invoice`), ID or expanded. */
+function latestInvoiceRef(sub: unknown): string {
+  if (sub !== null && typeof sub === 'object' && 'latest_invoice' in sub) {
+    const ref = stripeId(sub.latest_invoice);
+    if (ref !== '') return ref;
   }
-  return null;
+  return '';
+}
+
+/** Human invoice/receipt number (`2433-4817`, `0F0KKPT7-0005`) from invoice JSON. */
+function invoiceDisplayNumber(invoice: unknown): string {
+  if (invoice === null || typeof invoice !== 'object') return '';
+  if ('number' in invoice && typeof invoice.number === 'string') {
+    return invoice.number.trim();
+  }
+  return '';
+}
+
+/** Normalize an invoice/receipt number a user typed from their email. */
+export function normalizeInvoiceNumber(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function subscriptionStatus(obj: unknown): string {
@@ -349,11 +355,6 @@ export async function sha256Hex(value: string): Promise<string> {
   return hex;
 }
 
-/** Invoice footer carrying the recovery code (plain words, no "Stripe"). */
-function recoveryFooter(recoveryCode: string): string {
-  return `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`;
-}
-
 /** Link email → UID with the checkout hash, or a fresh one for legacy events. Returns the normalized email. */
 async function linkRecoveryEmail(
   db: D1Db,
@@ -450,9 +451,9 @@ function sessionEmail(obj: unknown): string {
 }
 
 /**
- * POST /stripe/checkout { userId } → { url, recoveryCode }. The code is
- * stashed client-side for the post-purchase dialog; the webhook patches
- * it onto the first invoice footer (receipt email → invoice PDF).
+ * POST /stripe/checkout { userId } → { url }. Recovery needs no
+ * pre-purchase secret: any invoice/receipt number from the buyer's
+ * payment emails plus the purchase email restores access.
  */
 export async function handleCheckout(
   request: Request,
@@ -469,22 +470,12 @@ export async function handleCheckout(
   if (!price) {
     return misconfigured('missing STRIPE_PRICE_MONTHLY');
   }
-  const recoveryCode = newRecoveryCode();
-  if (env.DB) {
-    await env.DB
-      .prepare(
-        'INSERT INTO recovery_pending (user_id, recovery_hash) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET recovery_hash = excluded.recovery_hash, created_at = CURRENT_TIMESTAMP',
-      )
-      .bind(userId, await sha256Hex(normalizeCode(recoveryCode)))
-      .run();
-  }
   const params = new URLSearchParams();
   params.set('mode', 'subscription');
   params.set('line_items[0][price]', price);
   params.set('line_items[0][quantity]', '1');
   params.set('client_reference_id', userId);
   params.set('metadata[userId]', userId);
-  params.set('subscription_data[metadata][recovery_code]', recoveryCode);
   params.set('success_url', SUCCESS_URL);
   params.set('cancel_url', CANCEL_URL);
   const result = await stripeApi(env, 'POST', '/checkout/sessions', params);
@@ -493,7 +484,7 @@ export async function handleCheckout(
     const error = `stripe ${result.status}: ${excerpt(result.text)}`;
     return Response.json({ error }, { status: 502 });
   }
-  return Response.json({ url, recoveryCode });
+  return Response.json({ url });
 }
 
 /** POST /stripe/portal { userId } → { url }. 404 when never subscribed. */
@@ -667,22 +658,29 @@ async function completeCheckout(
     }
   }
   await linkRecoveryEmail(db, email, userId);
-  // Checkout cannot carry subscription invoice_settings.footer (Stripe
-  // only allows issuer there), so the first invoice ships footer-less.
-  // Patch it here while it may still be a draft; finalized invoices
-  // reject footer edits and this best-effort write just no-ops.
-  const invoiceId = invoiceRef(obj);
-  if (invoiceId !== '') {
-    const code = checkoutCodeFromSubscription(result.json);
-    if (code !== null) {
-      const patch = new URLSearchParams();
-      patch.set('footer', recoveryFooter(code));
-      try {
-        await stripeApi(env, 'POST', `/invoices/${invoiceId}`, patch);
-      } catch {
-        // First invoice already finalized: receipt keeps no code, the
-        // in-app + Library copies remain authoritative.
+  // The receipt/invoice number the buyer already sees becomes the
+  // recovery credential: fetch the first invoice, store its display
+  // number. No footer hack, no new email content.
+  const invoiceId =
+    invoiceRef(obj) || latestInvoiceRef(result.json);
+  if (invoiceId !== '' && email !== '') {
+    try {
+      const invoice = await stripeApi(env, 'GET', `/invoices/${invoiceId}`);
+      if (invoice.status === 200 && invoice.json !== null) {
+        const display = invoiceDisplayNumber(invoice.json);
+        const norm = normalizeInvoiceNumber(display);
+        if (norm !== '') {
+          const emailNorm = normalizeEmail(email);
+          await db
+            .prepare(
+              'INSERT INTO recovery_invoices (invoice_norm, email, user_id) VALUES (?, ?, ?) ON CONFLICT(invoice_norm) DO UPDATE SET email = excluded.email, user_id = excluded.user_id',
+            )
+            .bind(norm, emailNorm, userId)
+            .run();
+        }
       }
+    } catch {
+      // Activation already succeeded; a later invoice event retries.
     }
   }
   return Response.json({ received: true });
@@ -732,6 +730,57 @@ async function subscriptionUpdated(
   return Response.json({ received: true });
 }
 
+/**
+ * Every paid invoice (first + renewals) becomes a recovery credential:
+ * store its display number against the owning UID + email. Best-effort;
+ * unknown customers just wait for a checkout event.
+ */
+async function recordPaidInvoice(
+  env: StripeEnv,
+  db: D1Db,
+  invoice: unknown,
+): Promise<void> {
+  const display = invoiceDisplayNumber(invoice);
+  const norm = normalizeInvoiceNumber(display);
+  if (norm === '') return;
+  const customerId = customerRef(invoice);
+  if (customerId === '') return;
+  const userRow = await db
+    .prepare('SELECT user_id FROM stripe_customers WHERE customer_id = ?')
+    .bind(customerId)
+    .first<{ user_id: string }>();
+  if (!userRow) return;
+  let email = '';
+  if (invoice !== null && typeof invoice === 'object' && 'customer_email' in invoice) {
+    const candidate = invoice.customer_email;
+    if (typeof candidate === 'string') email = candidate.trim();
+  }
+  if (email === '') {
+    try {
+      const customer = await stripeApi(env, 'GET', `/customers/${customerId}`);
+      if (
+        customer.status === 200 &&
+        customer.json !== null &&
+        typeof customer.json === 'object' &&
+        'email' in customer.json &&
+        typeof customer.json.email === 'string'
+      ) {
+        email = customer.json.email.trim();
+      }
+    } catch {
+      return;
+    }
+  }
+  const emailNorm = normalizeEmail(email);
+  if (emailNorm === '') return;
+  await db
+    .prepare(
+      'INSERT INTO recovery_invoices (invoice_norm, email, user_id) VALUES (?, ?, ?) ON CONFLICT(invoice_norm) DO UPDATE SET email = excluded.email, user_id = excluded.user_id',
+    )
+    .bind(norm, emailNorm, userRow.user_id)
+    .run();
+}
+
 async function subscriptionDeleted(
   db: D1Db,
   obj: unknown,
@@ -747,29 +796,6 @@ async function subscriptionDeleted(
     .first<{ user_id: string }>();
   if (row) await deactivateSubscription(db, row.user_id);
   return Response.json({ received: true });
-}
-
-/** Best-effort Stripe copy of the rotated code; in-app return is authoritative. */
-async function pushRecoveryCodeToStripe(
-  env: StripeEnv,
-  db: D1Db,
-  userId: string,
-  recoveryCode: string,
-): Promise<void> {
-  const row = await db
-    .prepare('SELECT customer_id, subscription_id FROM stripe_customers WHERE user_id = ?')
-    .bind(userId)
-    .first<{ customer_id: string; subscription_id: string | null }>();
-  const subscriptionId = row?.subscription_id ?? '';
-  if (subscriptionId === '') return;
-  const params = new URLSearchParams();
-  params.set('metadata[recovery_code]', recoveryCode);
-  params.set('invoice_settings[footer]', recoveryFooter(recoveryCode));
-  try {
-    await stripeApi(env, 'POST', `/subscriptions/${subscriptionId}`, params);
-  } catch {
-    // Rotation already succeeded in D1; the invoice copy is superseded.
-  }
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | null> {
@@ -846,7 +872,6 @@ export async function handleRecoveryCode(
     )
     .bind(targetEmail, userId, hash)
     .run();
-  await pushRecoveryCodeToStripe(env, db, userId, recoveryCode);
   return Response.json({ recoveryCode });
 }
 
@@ -894,9 +919,11 @@ async function recordRecoveryFail(
 }
 
 /**
- * POST /stripe/recover { email, code, newUserId } → { recovered, recoveryCode }.
- * Moves the subscription to the caller's UID; exactly one UID stays
- * active. Returns a fresh code (old one stops working).
+ * POST /stripe/recover { email, code?, invoiceNumber?, newUserId } →
+ * { recovered: true }. The credential is any invoice/receipt number from
+ * the buyer's payment emails (e.g. `2433-4817`, `0F0KKPT7-0005`) plus the
+ * purchase email. Legacy `code` credentials keep working. Moves the
+ * subscription to the caller's UID; exactly one UID stays active.
  */
 export async function handleRecover(
   request: Request,
@@ -907,16 +934,27 @@ export async function handleRecover(
     body !== null && typeof body.email === 'string' ? body.email : '';
   const codeRaw =
     body !== null && typeof body.code === 'string' ? body.code : '';
+  const invoiceRaw =
+    body !== null &&
+    (typeof body.invoiceNumber === 'string' || typeof body.receiptNumber === 'string')
+      ? `${body.invoiceNumber ?? ''}${body.receiptNumber ?? ''}`
+      : '';
   const newUserId =
     body !== null && typeof body.newUserId === 'string'
       ? body.newUserId.trim()
       : '';
-  if (emailRaw.trim() === '' || codeRaw.trim() === '' || newUserId === '') {
-    return Response.json({ error: 'missing email, code, or newUserId' }, { status: 400 });
+  if (emailRaw.trim() === '' || newUserId === '') {
+    return Response.json({ error: 'missing email or newUserId' }, { status: 400 });
   }
   const email = normalizeEmail(emailRaw);
   if (!email.includes('@')) {
-    return Response.json({ error: 'missing email, code, or newUserId' }, { status: 400 });
+    return Response.json({ error: 'missing email or newUserId' }, { status: 400 });
+  }
+  const invoiceNorm = normalizeInvoiceNumber(invoiceRaw);
+  const hasInvoice = invoiceNorm !== '';
+  const hasCode = codeRaw.trim() !== '';
+  if (!hasInvoice && !hasCode) {
+    return Response.json({ error: 'missing invoice number or code' }, { status: 400 });
   }
   if (!env.DB) {
     return misconfigured('missing DB binding');
@@ -929,19 +967,36 @@ export async function handleRecover(
       { status: 429 },
     );
   }
-  const link = await db
-    .prepare('SELECT user_id, recovery_hash FROM recovery_links WHERE email = ?')
-    .bind(email)
-    .first<{ user_id: string; recovery_hash: string }>();
-  const candidateHash = await sha256Hex(normalizeCode(codeRaw));
-  if (!link || link.recovery_hash !== candidateHash) {
-    await recordRecoveryFail(db, email, nowSec);
-    return Response.json(
-      { error: 'invalid email or code' },
-      { status: 404 },
-    );
+  let ownerId: string | null = null;
+  if (hasInvoice) {
+    const row = await db
+      .prepare('SELECT email, user_id FROM recovery_invoices WHERE invoice_norm = ?')
+      .bind(invoiceNorm)
+      .first<{ email: string; user_id: string }>();
+    if (!row || row.email !== email) {
+      await recordRecoveryFail(db, email, nowSec);
+      return Response.json(
+        { error: 'invalid email or invoice number' },
+        { status: 404 },
+      );
+    }
+    ownerId = row.user_id;
+  } else {
+    const link = await db
+      .prepare('SELECT user_id, recovery_hash FROM recovery_links WHERE email = ?')
+      .bind(email)
+      .first<{ user_id: string; recovery_hash: string }>();
+    const candidateHash = await sha256Hex(normalizeCode(codeRaw));
+    if (!link || link.recovery_hash !== candidateHash) {
+      await recordRecoveryFail(db, email, nowSec);
+      return Response.json(
+        { error: 'invalid email or code' },
+        { status: 404 },
+      );
+    }
+    ownerId = link.user_id;
   }
-  const live = await getSubscription(db, link.user_id, Date.now());
+  const live = await getSubscription(db, ownerId, Date.now());
   if (!live) {
     await recordRecoveryFail(db, email, nowSec);
     return Response.json(
@@ -949,28 +1004,25 @@ export async function handleRecover(
       { status: 410 },
     );
   }
-  const freshCode = newRecoveryCode();
-  const freshHash = await sha256Hex(normalizeCode(freshCode));
-  if (link.user_id !== newUserId) {
-    await transferSubscription(db, link.user_id, newUserId);
+  if (ownerId !== newUserId) {
+    await transferSubscription(db, ownerId, newUserId);
+    // Keep the invoice trail pointing at the live UID.
+    await db
+      .prepare('UPDATE recovery_invoices SET user_id = ? WHERE user_id = ?')
+      .bind(newUserId, ownerId)
+      .run()
+      .catch(() => undefined);
   } else {
     await db
       .prepare('DELETE FROM recovery_pending WHERE user_id IN (?, ?)')
-      .bind(link.user_id, newUserId)
+      .bind(ownerId, newUserId)
       .run();
   }
-  await db
-    .prepare(
-      'UPDATE recovery_links SET user_id = ?, recovery_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?',
-    )
-    .bind(newUserId, freshHash, email)
-    .run();
   await db
     .prepare('DELETE FROM recovery_attempts WHERE email = ?')
     .bind(email)
     .run();
-  await pushRecoveryCodeToStripe(env, db, newUserId, freshCode);
-  return Response.json({ recovered: true, recoveryCode: freshCode });
+  return Response.json({ recovered: true });
 }
 
 /**
@@ -1025,6 +1077,10 @@ export async function handleStripeWebhook(
   }
   if (type === 'checkout.session.completed') {
     return completeCheckout(env, db, obj);
+  }
+  if (type === 'invoice.paid' || type === 'invoice.payment_succeeded') {
+    await recordPaidInvoice(env, db, obj);
+    return Response.json({ received: true });
   }
   if (type === 'customer.subscription.updated') {
     return subscriptionUpdated(env, db, obj);

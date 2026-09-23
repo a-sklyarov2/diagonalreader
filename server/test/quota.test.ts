@@ -17,6 +17,7 @@ import type { Env } from '../src/summarize';
 interface FakeDbState {
   db: D1Db;
   links: Map<string, { user_id: string; recovery_hash: string }>;
+  invoices: Map<string, { email: string; user_id: string }>;
 }
 function makeFakeDb() {
   const subs = new Map<string, { product_id: string; expires_at: number }>();
@@ -25,6 +26,7 @@ function makeFakeDb() {
   const customerSubs = new Map<string, string>();
   const pending = new Map<string, string>();
   const links = new Map<string, { user_id: string; recovery_hash: string }>();
+  const invoices = new Map<string, { email: string; user_id: string }>();
   const attempts = new Map<string, { fails: number; window_start: number }>();
   const key = (u: string, m: string, d: string) => `${u}|${m}|${d}`;
   const db: D1Db = {
@@ -36,7 +38,7 @@ function makeFakeDb() {
           bound = values;
           return stmt;
         },
-        async first<T>() {
+        async first<T>(): Promise<T | null> {
           if (q.startsWith('SELECT product_id, expires_at')) {
             const row = subs.get(bound[0] as string);
             return (row ? { ...row } : null) as T | null;
@@ -91,9 +93,13 @@ function makeFakeDb() {
           if (q.startsWith('SELECT email FROM recovery_links')) {
             const wanted = bound[0] as string;
             for (const [email, row] of links) {
-              if (row.user_id === wanted) return { email } as T;
+              if (row.user_id === wanted) return { email } as unknown as T | null;
             }
-            return null as T | null;
+            return null;
+          }
+          if (q.startsWith('SELECT email, user_id FROM recovery_invoices')) {
+            const row = invoices.get(bound[0] as string);
+            return (row ? { ...row } : null) as T | null;
           }
           if (q.startsWith('SELECT fails, window_start FROM recovery_attempts')) {
             const row = attempts.get(bound[0] as string);
@@ -178,6 +184,16 @@ function makeFakeDb() {
             }
             return {};
           }
+          if (q.startsWith('INSERT INTO recovery_invoices')) {
+            invoices.set(bound[0] as string, { email: bound[1] as string, user_id: bound[2] as string });
+            return {};
+          }
+          if (q.startsWith('UPDATE recovery_invoices SET user_id')) {
+            for (const row of invoices.values()) {
+              if (row.user_id === (bound[1] as string)) row.user_id = bound[0] as string;
+            }
+            return {};
+          }
           if (q.startsWith('INSERT INTO recovery_attempts')) {
             attempts.set(bound[0] as string, { fails: bound[1] as number, window_start: bound[2] as number });
             return {};
@@ -215,7 +231,7 @@ function makeFakeDb() {
       return stmt;
     },
   };
-  return { db, subs, customers, pending, links, attempts };
+  return { db, subs, customers, pending, links, invoices, attempts };
 }
 
 const STRIPE_SECRET = 'sk-test';
@@ -480,13 +496,11 @@ describe('POST /stripe/checkout + /stripe/portal', () => {
       env,
     );
     expect(res.status).toBe(200);
-    const checkoutBody = (await res.json()) as { url: string; recoveryCode: string };
-    expect(checkoutBody.url).toBe('https://checkout.stripe.com/c/pay_123');
-    expect(checkoutBody.recoveryCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(await res.json()).toEqual({
+      url: 'https://checkout.stripe.com/c/pay_123',
+    });
     expect(seenBody).toContain(PRICE);
     expect(seenBody).toContain('u-checkout');
-    expect(seenBody).toContain('recovery_code');
-    expect(seenBody).not.toContain('invoice_settings');
 
     const missing = await worker.fetch(
       new Request('https://api.test/stripe/checkout', {
@@ -734,17 +748,24 @@ describe('POST /stripe/webhook (subscription access)', () => {
   });
 });
 
-describe('subscription recovery via email + code', () => {
-  async function checkoutAndLink(
+describe('subscription recovery via invoice number', () => {
+  async function checkoutAndStoreInvoice(
     state: FakeDbState,
     env: Record<string, unknown>,
     userId: string,
     email: string,
-  ): Promise<string> {
-    const sub = subscriptionJson();
+    invoiceNorm: string,
+  ): Promise<void> {
+    const sub = { ...subscriptionJson(), latest_invoice: 'in_123' };
     vi.stubGlobal('fetch', async (url: string) => {
       if (`${url}`.endsWith('/subscriptions/sub_123')) {
         return new Response(JSON.stringify(sub), { status: 200 });
+      }
+      if (`${url}`.endsWith('/invoices/in_123')) {
+        return new Response(
+          JSON.stringify({ id: 'in_123', number: '0F0KKPT7-0005', customer_email: email }),
+          { status: 200 },
+        );
       }
       if (`${url}`.endsWith('/customers/cus_123')) {
         return new Response(JSON.stringify({ email }), { status: 200 });
@@ -768,138 +789,96 @@ describe('subscription recovery via email + code', () => {
       env as never,
     );
     expect(buy.status).toBe(200);
-    expect(state.links.get(email.toLowerCase())?.user_id).toBe(userId);
-    // The stored value is a hash, never the plaintext from the session.
-    expect(state.links.get(email.toLowerCase())?.recovery_hash).not.toContain(email);
-    // Mint the viewable code through the authenticated-device endpoint.
-    vi.stubGlobal('fetch', async () => {
-      throw new Error('Stripe API must not be called without subscription id');
+    expect(state.invoices.get(invoiceNorm)).toEqual({
+      email: email.toLowerCase(),
+      user_id: userId,
     });
-    const mint = await worker.fetch(
-      new Request('https://api.test/stripe/recovery-code', {
-        method: 'POST',
-        body: JSON.stringify({ userId, rotate: true }),
-      }),
-      env as never,
-    );
-    expect(mint.status).toBe(200);
-    const mintBody = (await mint.json()) as { recoveryCode: string };
-    expect(mintBody.recoveryCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
-    return mintBody.recoveryCode;
   }
 
-  it('patches the first invoice footer from the webhook', async () => {
+  it('stores the first invoice number then transfers access to a new UID', async () => {
     const state = makeFakeDb();
     const env = { ...baseEnv, DB: state.db };
-    const sub = {
-      ...subscriptionJson(),
-      metadata: { recovery_code: 'ABCD-EFGH-JKLM' },
-    };
-    let patchedFooter = '';
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      if (`${url}`.endsWith('/subscriptions/sub_123')) {
-        return new Response(JSON.stringify(sub), { status: 200 });
-      }
-      if (`${url}`.endsWith('/invoices/in_123')) {
-        patchedFooter = `${init?.body ?? ''}`;
-        return new Response(JSON.stringify({ id: 'in_123' }), { status: 200 });
-      }
-      throw new Error(`unexpected Stripe call: ${url}`);
+    await checkoutAndStoreInvoice(state, env, 'u-old', 'Pay@Example.com', '0F0KKPT70005');
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('recover must not touch Stripe');
     });
-    const buy = await worker.fetch(
-      stripeWebhookRequest({
-        type: 'checkout.session.completed',
-        data: {
-          object: {
-            id: 'cs_invoice',
-            client_reference_id: 'u-invoice',
-            metadata: { userId: 'u-invoice' },
-            customer_details: { email: 'invoice@example.com' },
-            subscription: 'sub_123',
-            customer: 'cus_123',
-            invoice: 'in_123',
-          },
-        },
-      }),
-      env,
-    );
-    expect(buy.status).toBe(200);
-    expect(patchedFooter).toContain('footer');
-    expect(decodeURIComponent(patchedFooter)).toContain('ABCD-EFGH-JKLM');
-  });
 
-  it('links the purchase email then transfers access to a new UID', async () => {
-    const state = makeFakeDb();
-    const env = { ...baseEnv, DB: state.db };
-    const code = await checkoutAndLink(state, env, 'u-old', 'Pay@Example.com');
     const wrong = await worker.fetch(
       new Request('https://api.test/stripe/recover', {
         method: 'POST',
         body: JSON.stringify({
           email: 'pay@example.com',
-          code: 'AAAA-BBBB-CCCC',
+          invoiceNumber: 'WRONG-0000',
           newUserId: 'u-new',
         }),
       }),
       env,
     );
     expect(wrong.status).toBe(404);
-    expect(await wrong.json()).toEqual({ error: 'invalid email or code' });
+    expect(await wrong.json()).toEqual({ error: 'invalid email or invoice number' });
 
     const good = await worker.fetch(
       new Request('https://api.test/stripe/recover', {
         method: 'POST',
         body: JSON.stringify({
           email: 'Pay@Example.com',
-          code,
+          invoiceNumber: '0f0kkpt7-0005',
           newUserId: 'u-new',
         }),
       }),
       env,
     );
     expect(good.status).toBe(200);
-    const goodBody = (await good.json()) as {
-      recovered: boolean;
-      recoveryCode: string;
-    };
-    expect(goodBody.recovered).toBe(true);
-    expect(goodBody.recoveryCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(await good.json()).toEqual({ recovered: true });
     expect((await getQuota(state.db, 'u-new', 100, sept)).unlimited).toBe(true);
     expect((await getQuota(state.db, 'u-old', 100, sept)).unlimited).toBe(false);
-
-    const replay = await worker.fetch(
-      new Request('https://api.test/stripe/recover', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: 'pay@example.com',
-          code,
-          newUserId: 'u-third',
-        }),
-      }),
-      env,
-    );
-    expect(replay.status).toBe(404);
-
-    const rotated = await worker.fetch(
-      new Request('https://api.test/stripe/recover', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: 'pay@example.com',
-          code: goodBody.recoveryCode,
-          newUserId: 'u-third',
-        }),
-      }),
-      env,
-    );
-    expect(rotated.status).toBe(200);
-    expect((await getQuota(state.db, 'u-third', 100, sept)).unlimited).toBe(true);
-    expect((await getQuota(state.db, 'u-new', 100, sept)).unlimited).toBe(false);
   });
 
-  it('throttles after 10 failures and mints only while subscribed', async () => {
+  it('records renewal invoices via invoice.paid', async () => {
     const state = makeFakeDb();
     const env = { ...baseEnv, DB: state.db };
-    await checkoutAndLink(state, env, 'u-victim', 'victim@example.com');
+    await checkoutAndStoreInvoice(state, env, 'u-sub', 'sub@example.com', '0F0KKPT70005');
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('invoice.paid must not touch Stripe');
+    });
+    const paid = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: 'in_456',
+            number: '0F0KKPT7-0006',
+            customer: 'cus_123',
+            customer_email: 'sub@example.com',
+          },
+        },
+      }),
+      env,
+    );
+    expect(paid.status).toBe(200);
+    expect(state.invoices.get('0F0KKPT70006')).toEqual({
+      email: 'sub@example.com',
+      user_id: 'u-sub',
+    });
+    const renewed = await worker.fetch(
+      new Request('https://api.test/stripe/recover', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'sub@example.com',
+          invoiceNumber: '0F0KKPT7-0006',
+          newUserId: 'u-fresh',
+        }),
+      }),
+      env,
+    );
+    expect(renewed.status).toBe(200);
+    expect((await getQuota(state.db, 'u-fresh', 100, sept)).unlimited).toBe(true);
+  });
+
+  it('throttles after 10 failures', async () => {
+    const state = makeFakeDb();
+    const env = { ...baseEnv, DB: state.db };
+    await checkoutAndStoreInvoice(state, env, 'u-victim', 'victim@example.com', '0F0KKPT70005');
     vi.stubGlobal('fetch', async () => {
       throw new Error('no Stripe calls on failed recovery');
     });
@@ -909,7 +888,7 @@ describe('subscription recovery via email + code', () => {
           method: 'POST',
           body: JSON.stringify({
             email: 'victim@example.com',
-            code: 'WRONG-CODE-0000',
+            invoiceNumber: 'WRONG-0000',
             newUserId: 'u-attacker',
           }),
         }),
@@ -922,7 +901,7 @@ describe('subscription recovery via email + code', () => {
         method: 'POST',
         body: JSON.stringify({
           email: 'victim@example.com',
-          code: 'WRONG-CODE-0000',
+          invoiceNumber: 'WRONG-0000',
           newUserId: 'u-attacker',
         }),
       }),
@@ -932,45 +911,5 @@ describe('subscription recovery via email + code', () => {
     expect(await throttled.json()).toEqual({
       error: 'too many attempts, try again later',
     });
-
-    const noSub = await worker.fetch(
-      new Request('https://api.test/stripe/recovery-code', {
-        method: 'POST',
-        body: JSON.stringify({ userId: 'u-free' }),
-      }),
-      env,
-    );
-    expect(noSub.status).toBe(404);
-    expect(await noSub.json()).toEqual({ error: 'no subscription found' });
-  });
-
-  it('re-viewing without rotate never mints; rotate invalidates the old', async () => {
-    const state = makeFakeDb();
-    const env = { ...baseEnv, DB: state.db };
-    const first = await checkoutAndLink(state, env, 'u-stable', 'stable@example.com');
-    vi.stubGlobal('fetch', async () => {
-      throw new Error('view must not touch Stripe');
-    });
-    const view = await worker.fetch(
-      new Request('https://api.test/stripe/recovery-code', {
-        method: 'POST',
-        body: JSON.stringify({ userId: 'u-stable' }),
-      }),
-      env,
-    );
-    expect(view.status).toBe(404);
-    expect(await view.json()).toEqual({
-      error: 'code unavailable, rotate to generate a new one',
-    });
-    const rotated = await worker.fetch(
-      new Request('https://api.test/stripe/recovery-code', {
-        method: 'POST',
-        body: JSON.stringify({ userId: 'u-stable', rotate: true }),
-      }),
-      env,
-    );
-    expect(rotated.status).toBe(200);
-    const rotatedBody = (await rotated.json()) as { recoveryCode: string };
-    expect(rotatedBody.recoveryCode).not.toBe(first);
   });
 });

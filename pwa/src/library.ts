@@ -9,7 +9,7 @@
  * browser (target _blank is unreliable inside installed standalone).
  */
 
-import { fetchRecoveryCode, openPortal, recoverSubscription, requestCheckout } from './api';
+import { openPortal, recoverSubscription, requestCheckout } from './api';
 import type { Billing } from './billing';
 import {
   getTextSize,
@@ -21,8 +21,6 @@ import {
 } from './prefs';
 import type { TextSize, Voice } from './prefs';
 import { showDialog, snackbar } from './ui';
-
-const PENDING_RECOVERY_KEY = 'diagonal_pending_recovery';
 
 function nextResetLabel(month: string): string {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
@@ -77,53 +75,11 @@ export class LibraryView {
 
   private async subscribe(): Promise<void> {
     try {
-      const { url, recoveryCode } = await requestCheckout(this.userId);
-      try {
-        localStorage.setItem(PENDING_RECOVERY_KEY, recoveryCode);
-      } catch {
-        // Private mode: the success screen just skips the save-again copy.
-      }
+      const { url } = await requestCheckout(this.userId);
       window.location.href = url;
     } catch (e) {
       snackbar(e instanceof Error ? e.message : `${e}`);
     }
-  }
-
-  private async mintAndShowCode(): Promise<void> {
-    try {
-      const { recoveryCode } = await fetchRecoveryCode(this.userId);
-      showDialog(
-        'New recovery code',
-        [
-          recoveryCode,
-          'Save it somewhere safe — email it to yourself. The old code, including any emailed copy, no longer works.',
-        ],
-        [
-          {
-            label: 'Copy',
-            onClick: () => {
-              void navigator.clipboard
-                ?.writeText(recoveryCode)
-                .catch(() => undefined);
-            },
-          },
-          { label: 'Done' },
-        ],
-      );
-    } catch (e) {
-      snackbar(e instanceof Error ? e.message : `${e}`);
-    }
-  }
-
-  private async showMintedCode(): Promise<void> {
-    showDialog(
-      'Generate a new code?',
-      [
-        'This invalidates your current code, including the copy at the bottom of your purchase confirmation email.',
-        'Only do this if you lost your code.',
-      ],
-      [{ label: 'Cancel' }, { label: 'Generate new code', onClick: () => void this.mintAndShowCode() }],
-    );
   }
 
   private openRestoreDialog(): void {
@@ -134,16 +90,20 @@ export class LibraryView {
     box.setAttribute('role', 'dialog');
     const heading = document.createElement('h2');
     heading.textContent = 'Restore access';
+    const hint = document.createElement('p');
+    hint.className = 'dialog-line';
+    hint.textContent =
+      'Enter your purchase email plus any invoice or receipt number from a payment email (e.g. 2433-4817 or 0F0KKPT7-0005).';
     const email = document.createElement('input');
     email.className = 'library-input';
     email.type = 'email';
     email.placeholder = 'Purchase email';
     email.autocomplete = 'email';
-    const code = document.createElement('input');
-    code.className = 'library-input';
-    code.type = 'text';
-    code.placeholder = 'Recovery code';
-    code.autocomplete = 'one-time-code';
+    const invoice = document.createElement('input');
+    invoice.className = 'library-input';
+    invoice.type = 'text';
+    invoice.placeholder = 'Invoice or receipt number';
+    invoice.autocomplete = 'off';
     const row = document.createElement('div');
     row.className = 'dialog-actions';
     const cancel = document.createElement('button');
@@ -158,15 +118,10 @@ export class LibraryView {
     restore.addEventListener('click', () => {
       void (async () => {
         try {
-          const { recoveryCode } = await recoverSubscription(
-            email.value,
-            code.value,
-            this.userId,
-          );
+          await recoverSubscription(email.value, invoice.value, this.userId);
           overlay.remove();
           showDialog('Subscription restored', [
             'Unlimited is active on this device.',
-            `New recovery code: ${recoveryCode} — save it; the old code no longer works.`,
           ], [{ label: 'Done' }]);
           await this.billing.refreshQuota();
         } catch (e) {
@@ -175,7 +130,7 @@ export class LibraryView {
       })();
     });
     row.append(cancel, restore);
-    box.append(heading, email, code, row);
+    box.append(heading, hint, email, invoice, row);
     overlay.appendChild(box);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.remove();
@@ -502,19 +457,13 @@ export class LibraryView {
     wrap.dataset.testid = 'recoverySection';
     const title = document.createElement('div');
     title.className = 'library-tier-title';
-    title.textContent = 'Recovery code';
+    title.textContent = 'Restore on a new device';
     const p = document.createElement('p');
     p.className = 'library-muted';
     p.textContent =
-      'Your subscription is tied to this device. Save the code somewhere safe — email it to yourself ' +
-      'so you can restore Unlimited if you lose this device. Only the latest code works.';
-    const codeBtn = document.createElement('button');
-    codeBtn.type = 'button';
-    codeBtn.className = 'library-btn secondary';
-    codeBtn.dataset.testid = 'libraryRecoveryCode';
-    codeBtn.textContent = 'Generate new recovery code';
-    codeBtn.addEventListener('click', () => void this.showMintedCode());
-    wrap.append(title, p, codeBtn);
+      'Your subscription is tied to this device. To restore it elsewhere you need your purchase email ' +
+      'plus any invoice or receipt number from a payment email — no need to save anything extra.';
+    wrap.append(title, p);
     return wrap;
   }
 

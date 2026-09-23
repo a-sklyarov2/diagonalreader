@@ -120,39 +120,18 @@ export async function requestCheckout(userId: string): Promise<CheckoutResult> {
   return { url: body.url, recoveryCode: body.recoveryCode };
 }
 
-export async function fetchRecoveryCode(
-  userId: string,
-  opts?: { rotate?: boolean },
-): Promise<{ recoveryCode: string }> {
-  const res = await fetch('/stripe/recovery-code', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ userId, rotate: opts?.rotate ?? true }),
-  });
-  if (!res.ok) await throwForStatus(res);
-  const body = (await res.json()) as { recoveryCode?: unknown };
-  if (typeof body.recoveryCode !== 'string' || body.recoveryCode === '') {
-    throw new Error('recovery code failed: missing code');
-  }
-  return { recoveryCode: body.recoveryCode };
-}
-
 export async function recoverSubscription(
   email: string,
-  code: string,
+  invoiceNumber: string,
   newUserId: string,
-): Promise<{ recoveryCode: string }> {
+): Promise<{ recovered: boolean }> {
   const res = await fetch('/stripe/recover', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, code, newUserId }),
+    body: JSON.stringify({ email, invoiceNumber, newUserId }),
   });
   if (!res.ok) await throwForStatus(res);
-  const body = (await res.json()) as { recoveryCode?: unknown };
-  if (typeof body.recoveryCode !== 'string' || body.recoveryCode === '') {
-    throw new Error('restore failed: missing recovery code');
-  }
-  return { recoveryCode: body.recoveryCode };
+  return { recovered: true };
 }
 
 export async function openPortal(userId: string): Promise<never> {

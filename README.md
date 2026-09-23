@@ -53,30 +53,27 @@ printf '%s' "$WHSEC" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
 1. Create product `Diagonal Unlimited`, one monthly recurring price
    (e.g. €4.99); copy the `price_…` id into `STRIPE_PRICE_MONTHLY`.
 2. Webhook endpoint `https://api.diagonalreader.com/stripe/webhook`
-   with events `checkout.session.completed`,
+   with events `checkout.session.completed`, `invoice.paid`,
    `customer.subscription.updated`, `customer.subscription.deleted`,
    `invoice.payment_failed`; copy the `whsec_…` signing secret.
 3. `sk_live_…` secret (or restricted key with
    `checkout.sessions:write`, `billing_portal.sessions:write`,
-   `subscriptions:read`); paste all three only via
+   `subscriptions:read`, `invoices:read`); paste all three only via
    `wrangler secret put`, never chat/email.
 4. Local webhook test: `stripe listen --forward-to
    127.0.0.1:8787/stripe/webhook` while deploying with test-mode keys.
    No publishable key needed (no Stripe.js; redirect-to-URL flow).
 5. In Dashboard Settings → Business → Customer emails, enable
-   Successful payments: Stripe sends the receipt email whose linked
-   invoice PDF carries the recovery-code footer (lost-device backup).
-6. Apply the recovery migration everywhere the schema runs:
+   Successful payments so buyers keep getting payment emails (any
+   invoice/receipt number in them restores access).
+6. Apply the recovery migrations everywhere the schema runs:
    `npx wrangler d1 migrations apply diagonal --local` and `--remote`
-   (creates `recovery_pending`, `recovery_links`,
-   `recovery_attempts`, plus `stripe_customers.subscription_id`).
+   (`0004` recovery codes, `0005` `recovery_invoices`).
 
 ## Subscription recovery (no login, no outbound email)
-Checkout mints a `XXXX-XXXX-XXXX` code: shown in-app before the Stripe
-redirect, repeated after `?checkout=success`, and printed in the Stripe
-invoice footer. The webhook links the Stripe purchase email to the
-paying UID (hash only for the code). On a new/wiped device, Library →
-`Already subscribed? Restore access` takes purchase email + code and
-moves Unlimited to the current UID (exactly one active UID; the old
-code rotates on every success). While still subscribed, Library →
-`Recovery code` mints a fresh code for the current device.
+The webhook stores every paid invoice/receipt number against the paying
+UID + purchase email. On a new/wiped device, Library →
+`Already subscribed? Restore access` takes purchase email + any invoice
+or receipt number from a payment email (e.g. `2433-4817`,
+`0F0KKPT7-0005`) and moves Unlimited to the current UID (exactly one
+active UID; invoice numbers never expire or rotate).
