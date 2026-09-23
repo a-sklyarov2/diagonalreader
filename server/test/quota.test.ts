@@ -778,7 +778,7 @@ describe('subscription recovery via email + code', () => {
     const mint = await worker.fetch(
       new Request('https://api.test/stripe/recovery-code', {
         method: 'POST',
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, rotate: true }),
       }),
       env as never,
     );
@@ -906,5 +906,35 @@ describe('subscription recovery via email + code', () => {
     );
     expect(noSub.status).toBe(404);
     expect(await noSub.json()).toEqual({ error: 'no subscription found' });
+  });
+
+  it('re-viewing without rotate never mints; rotate invalidates the old', async () => {
+    const state = makeFakeDb();
+    const env = { ...baseEnv, DB: state.db };
+    const first = await checkoutAndLink(state, env, 'u-stable', 'stable@example.com');
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('view must not touch Stripe');
+    });
+    const view = await worker.fetch(
+      new Request('https://api.test/stripe/recovery-code', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'u-stable' }),
+      }),
+      env,
+    );
+    expect(view.status).toBe(404);
+    expect(await view.json()).toEqual({
+      error: 'code unavailable, rotate to generate a new one',
+    });
+    const rotated = await worker.fetch(
+      new Request('https://api.test/stripe/recovery-code', {
+        method: 'POST',
+        body: JSON.stringify({ userId: 'u-stable', rotate: true }),
+      }),
+      env,
+    );
+    expect(rotated.status).toBe(200);
+    const rotatedBody = (await rotated.json()) as { recoveryCode: string };
+    expect(rotatedBody.recoveryCode).not.toBe(first);
   });
 });

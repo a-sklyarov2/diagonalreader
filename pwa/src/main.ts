@@ -55,9 +55,15 @@ async function boot(): Promise<void> {
         stashed = null;
       }
       if (stashed) {
-        showDialog('Subscription active', [stashed, 'Write it down — it is also on your Stripe invoice.'], [
-          { label: 'Done' },
-        ]);
+        showDialog(
+          'Subscription active',
+          [
+            `Your recovery code: ${stashed}`,
+            'Save it somewhere safe — email it to yourself.',
+            'You can also find it later in the Library, or at the bottom of your purchase confirmation email.',
+          ],
+          [{ label: 'Done' }],
+        );
       }
     }
   }

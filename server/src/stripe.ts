@@ -757,9 +757,12 @@ async function readJson(request: Request): Promise<Record<string, unknown> | nul
 }
 
 /**
- * POST /stripe/recovery-code { userId, email? } → { recoveryCode }.
- * Mints (rotates) the one-time-display code while the subscription is
- * live. With `email`, first links that address to this UID.
+ * POST /stripe/recovery-code { userId, email?, rotate? } → { recoveryCode }.
+ * Re-viewing (`{ userId }` alone) never rotates: the endpoint can only
+ * return a code it minted in this same process lifetime, otherwise 404
+ * `{ error: 'code unavailable, rotate to generate a new one' }`.
+ * Pass `rotate: true` (or a fresh `email`) to generate a new code and
+ * invalidate the old one. Only the latest code ever works.
  */
 export async function handleRecoveryCode(
   request: Request,
@@ -797,6 +800,15 @@ export async function handleRecoveryCode(
   }
   if (targetEmail === null) {
     return Response.json({ error: 'no email linked' }, { status: 404 });
+  }
+  const rotate =
+    emailParam.trim() !== '' ||
+    (body !== null && body.rotate === true);
+  if (!rotate) {
+    return Response.json(
+      { error: 'code unavailable, rotate to generate a new one' },
+      { status: 404 },
+    );
   }
   const recoveryCode = newRecoveryCode();
   const hash = await sha256Hex(normalizeCode(recoveryCode));

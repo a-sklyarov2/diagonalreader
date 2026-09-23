@@ -120,11 +120,14 @@ export async function requestCheckout(userId: string): Promise<CheckoutResult> {
   return { url: body.url, recoveryCode: body.recoveryCode };
 }
 
-export async function fetchRecoveryCode(userId: string): Promise<{ recoveryCode: string }> {
+export async function fetchRecoveryCode(
+  userId: string,
+  opts?: { rotate?: boolean },
+): Promise<{ recoveryCode: string }> {
   const res = await fetch('/stripe/recovery-code', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ userId }),
+    body: JSON.stringify({ userId, rotate: opts?.rotate ?? true }),
   });
   if (!res.ok) await throwForStatus(res);
   const body = (await res.json()) as { recoveryCode?: unknown };

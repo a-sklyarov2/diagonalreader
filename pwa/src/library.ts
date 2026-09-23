@@ -83,17 +83,31 @@ export class LibraryView {
       } catch {
         // Private mode: the success screen just skips the save-again copy.
       }
+      window.location.href = url;
+    } catch (e) {
+      snackbar(e instanceof Error ? e.message : `${e}`);
+    }
+  }
+
+  private async mintAndShowCode(): Promise<void> {
+    try {
+      const { recoveryCode } = await fetchRecoveryCode(this.userId);
       showDialog(
-        'Recovery code',
-        [recoveryCode, 'Write it down — it is also on your Stripe invoice.'],
+        'New recovery code',
         [
-          { label: 'Cancel' },
+          recoveryCode,
+          'Save it somewhere safe — email it to yourself. The old code, including any emailed copy, no longer works.',
+        ],
+        [
           {
-            label: 'Continue',
+            label: 'Copy',
             onClick: () => {
-              window.location.href = url;
+              void navigator.clipboard
+                ?.writeText(recoveryCode)
+                .catch(() => undefined);
             },
           },
+          { label: 'Done' },
         ],
       );
     } catch (e) {
@@ -102,22 +116,14 @@ export class LibraryView {
   }
 
   private async showMintedCode(): Promise<void> {
-    try {
-      const { recoveryCode } = await fetchRecoveryCode(this.userId);
-      showDialog('Recovery code', [recoveryCode], [
-        {
-          label: 'Copy',
-          onClick: () => {
-            void navigator.clipboard
-              ?.writeText(recoveryCode)
-              .catch(() => undefined);
-          },
-        },
-        { label: 'Done' },
-      ]);
-    } catch (e) {
-      snackbar(e instanceof Error ? e.message : `${e}`);
-    }
+    showDialog(
+      'Generate a new code?',
+      [
+        'This invalidates your current code, including the copy at the bottom of your purchase confirmation email.',
+        'Only do this if you lost your code.',
+      ],
+      [{ label: 'Cancel' }, { label: 'Generate new code', onClick: () => void this.mintAndShowCode() }],
+    );
   }
 
   private openRestoreDialog(): void {
@@ -482,17 +488,33 @@ export class LibraryView {
     manage.dataset.testid = 'libraryManage';
     manage.textContent = 'Manage subscription';
     manage.addEventListener('click', () => void this.manage());
-    const codeBtn = document.createElement('button');
-    codeBtn.type = 'button';
-    codeBtn.className = 'library-btn secondary';
-    codeBtn.dataset.testid = 'libraryRecoveryCode';
-    codeBtn.textContent = 'Recovery code';
-    codeBtn.addEventListener('click', () => void this.showMintedCode());
     const note = document.createElement('p');
     note.className = 'library-muted';
     note.textContent =
       'Cancel anytime — access runs to the end of the paid period.';
-    wrap.append(p, manage, codeBtn, note);
+    wrap.append(p, manage, note);
+    wrap.appendChild(this.recoverySection());
+    return wrap;
+  }
+
+  private recoverySection(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.dataset.testid = 'recoverySection';
+    const title = document.createElement('div');
+    title.className = 'library-tier-title';
+    title.textContent = 'Recovery code';
+    const p = document.createElement('p');
+    p.className = 'library-muted';
+    p.textContent =
+      'Your subscription is tied to this device. Save the code somewhere safe — email it to yourself ' +
+      'so you can restore Unlimited if you lose this device. Only the latest code works.';
+    const codeBtn = document.createElement('button');
+    codeBtn.type = 'button';
+    codeBtn.className = 'library-btn secondary';
+    codeBtn.dataset.testid = 'libraryRecoveryCode';
+    codeBtn.textContent = 'Generate new recovery code';
+    codeBtn.addEventListener('click', () => void this.showMintedCode());
+    wrap.append(title, p, codeBtn);
     return wrap;
   }
 
