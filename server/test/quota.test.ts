@@ -486,7 +486,7 @@ describe('POST /stripe/checkout + /stripe/portal', () => {
     expect(seenBody).toContain(PRICE);
     expect(seenBody).toContain('u-checkout');
     expect(seenBody).toContain('recovery_code');
-    expect(seenBody).toContain('invoice_settings');
+    expect(seenBody).not.toContain('invoice_settings');
 
     const missing = await worker.fetch(
       new Request('https://api.test/stripe/checkout', {
@@ -788,14 +788,50 @@ describe('subscription recovery via email + code', () => {
     return mintBody.recoveryCode;
   }
 
+  it('patches the first invoice footer from the webhook', async () => {
+    const state = makeFakeDb();
+    const env = { ...baseEnv, DB: state.db };
+    const sub = {
+      ...subscriptionJson(),
+      metadata: { recovery_code: 'ABCD-EFGH-JKLM' },
+    };
+    let patchedFooter = '';
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (`${url}`.endsWith('/subscriptions/sub_123')) {
+        return new Response(JSON.stringify(sub), { status: 200 });
+      }
+      if (`${url}`.endsWith('/invoices/in_123')) {
+        patchedFooter = `${init?.body ?? ''}`;
+        return new Response(JSON.stringify({ id: 'in_123' }), { status: 200 });
+      }
+      throw new Error(`unexpected Stripe call: ${url}`);
+    });
+    const buy = await worker.fetch(
+      stripeWebhookRequest({
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            id: 'cs_invoice',
+            client_reference_id: 'u-invoice',
+            metadata: { userId: 'u-invoice' },
+            customer_details: { email: 'invoice@example.com' },
+            subscription: 'sub_123',
+            customer: 'cus_123',
+            invoice: 'in_123',
+          },
+        },
+      }),
+      env,
+    );
+    expect(buy.status).toBe(200);
+    expect(patchedFooter).toContain('footer');
+    expect(decodeURIComponent(patchedFooter)).toContain('ABCD-EFGH-JKLM');
+  });
+
   it('links the purchase email then transfers access to a new UID', async () => {
     const state = makeFakeDb();
     const env = { ...baseEnv, DB: state.db };
     const code = await checkoutAndLink(state, env, 'u-old', 'Pay@Example.com');
-    vi.stubGlobal('fetch', async () => {
-      throw new Error('Stripe rotation is best-effort and unneeded here');
-    });
-
     const wrong = await worker.fetch(
       new Request('https://api.test/stripe/recover', {
         method: 'POST',

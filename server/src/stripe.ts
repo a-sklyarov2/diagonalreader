@@ -179,6 +179,32 @@ function customerRef(obj: unknown): string {
   return '';
 }
 
+/** Latest-invoice id on a checkout session (`in_…` or expanded { id }). */
+function invoiceRef(obj: unknown): string {
+  if (obj !== null && typeof obj === 'object' && 'invoice' in obj) {
+    const ref = stripeId(obj.invoice);
+    if (ref !== '') return ref;
+  }
+  return '';
+}
+
+/** Recovery code Stripe stored on the subscription metadata, if any. */
+function checkoutCodeFromSubscription(sub: unknown): string | null {
+  if (sub !== null && typeof sub === 'object' && 'metadata' in sub) {
+    const meta = sub.metadata;
+    if (
+      meta !== null &&
+      typeof meta === 'object' &&
+      'recovery_code' in meta &&
+      typeof meta.recovery_code === 'string' &&
+      meta.recovery_code.trim() !== ''
+    ) {
+      return meta.recovery_code.trim();
+    }
+  }
+  return null;
+}
+
 function subscriptionStatus(obj: unknown): string {
   if (obj !== null && typeof obj === 'object' && 'status' in obj) {
     const candidate = obj.status;
@@ -323,6 +349,11 @@ export async function sha256Hex(value: string): Promise<string> {
   return hex;
 }
 
+/** Invoice footer carrying the recovery code (plain words, no "Stripe"). */
+function recoveryFooter(recoveryCode: string): string {
+  return `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`;
+}
+
 /** Link email → UID with the checkout hash, or a fresh one for legacy events. Returns the normalized email. */
 async function linkRecoveryEmail(
   db: D1Db,
@@ -419,9 +450,9 @@ function sessionEmail(obj: unknown): string {
 }
 
 /**
- * POST /stripe/checkout { userId } → { url, recoveryCode }. The PWA shows
- * the code before redirecting; the same code also lands on the Stripe
- * invoice footer (receipt email → invoice PDF) for lost-device backup.
+ * POST /stripe/checkout { userId } → { url, recoveryCode }. The code is
+ * stashed client-side for the post-purchase dialog; the webhook patches
+ * it onto the first invoice footer (receipt email → invoice PDF).
  */
 export async function handleCheckout(
   request: Request,
@@ -447,34 +478,16 @@ export async function handleCheckout(
       .bind(userId, await sha256Hex(normalizeCode(recoveryCode)))
       .run();
   }
-  const footer = `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`;
-  const withInvoice = new URLSearchParams();
-  withInvoice.set('mode', 'subscription');
-  withInvoice.set('line_items[0][price]', price);
-  withInvoice.set('line_items[0][quantity]', '1');
-  withInvoice.set('client_reference_id', userId);
-  withInvoice.set('metadata[userId]', userId);
-  withInvoice.set('subscription_data[metadata][recovery_code]', recoveryCode);
-  withInvoice.set('subscription_data[invoice_settings][footer]', footer);
-  withInvoice.set('success_url', SUCCESS_URL);
-  withInvoice.set('cancel_url', CANCEL_URL);
-  let result = await stripeApi(env, 'POST', '/checkout/sessions', withInvoice);
-  if (
-    result.status >= 400 &&
-    result.status < 500 &&
-    /invoice_settings/i.test(result.text)
-  ) {
-    const metadataOnly = new URLSearchParams();
-    metadataOnly.set('mode', 'subscription');
-    metadataOnly.set('line_items[0][price]', price);
-    metadataOnly.set('line_items[0][quantity]', '1');
-    metadataOnly.set('client_reference_id', userId);
-    metadataOnly.set('metadata[userId]', userId);
-    metadataOnly.set('subscription_data[metadata][recovery_code]', recoveryCode);
-    metadataOnly.set('success_url', SUCCESS_URL);
-    metadataOnly.set('cancel_url', CANCEL_URL);
-    result = await stripeApi(env, 'POST', '/checkout/sessions', metadataOnly);
-  }
+  const params = new URLSearchParams();
+  params.set('mode', 'subscription');
+  params.set('line_items[0][price]', price);
+  params.set('line_items[0][quantity]', '1');
+  params.set('client_reference_id', userId);
+  params.set('metadata[userId]', userId);
+  params.set('subscription_data[metadata][recovery_code]', recoveryCode);
+  params.set('success_url', SUCCESS_URL);
+  params.set('cancel_url', CANCEL_URL);
+  const result = await stripeApi(env, 'POST', '/checkout/sessions', params);
   const url = responseUrl(result.json);
   if (result.status !== 200 || url === null) {
     const error = `stripe ${result.status}: ${excerpt(result.text)}`;
@@ -654,6 +667,24 @@ async function completeCheckout(
     }
   }
   await linkRecoveryEmail(db, email, userId);
+  // Checkout cannot carry subscription invoice_settings.footer (Stripe
+  // only allows issuer there), so the first invoice ships footer-less.
+  // Patch it here while it may still be a draft; finalized invoices
+  // reject footer edits and this best-effort write just no-ops.
+  const invoiceId = invoiceRef(obj);
+  if (invoiceId !== '') {
+    const code = checkoutCodeFromSubscription(result.json);
+    if (code !== null) {
+      const patch = new URLSearchParams();
+      patch.set('footer', recoveryFooter(code));
+      try {
+        await stripeApi(env, 'POST', `/invoices/${invoiceId}`, patch);
+      } catch {
+        // First invoice already finalized: receipt keeps no code, the
+        // in-app + Library copies remain authoritative.
+      }
+    }
+  }
   return Response.json({ received: true });
 }
 
@@ -733,10 +764,7 @@ async function pushRecoveryCodeToStripe(
   if (subscriptionId === '') return;
   const params = new URLSearchParams();
   params.set('metadata[recovery_code]', recoveryCode);
-  params.set(
-    'invoice_settings[footer]',
-    `Reader recovery code: ${recoveryCode} — keep this email; enter the code with your purchase email in Library to restore Unlimited on a new device.`,
-  );
+  params.set('invoice_settings[footer]', recoveryFooter(recoveryCode));
   try {
     await stripeApi(env, 'POST', `/subscriptions/${subscriptionId}`, params);
   } catch {
