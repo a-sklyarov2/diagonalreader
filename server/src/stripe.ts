@@ -196,13 +196,22 @@ function latestInvoiceRef(sub: unknown): string {
   return '';
 }
 
-/** Human invoice/receipt number (`2433-4817`, `0F0KKPT7-0005`) from invoice JSON. */
-function invoiceDisplayNumber(invoice: unknown): string {
-  if (invoice === null || typeof invoice !== 'object') return '';
+/** Human invoice + receipt numbers from invoice JSON. `number` is the
+ * invoice number (`0F0KKPT7-0005`); `receipt_number` is the transaction
+ * number on email receipts (`2433-4817`) — nullable, absent pre-payment.
+ * Either one recovers; both are stored when present. */
+function invoiceRecoveryNumbers(invoice: unknown): string[] {
+  if (invoice === null || typeof invoice !== 'object') return [];
+  const out: string[] = [];
   if ('number' in invoice && typeof invoice.number === 'string') {
-    return invoice.number.trim();
+    const norm = normalizeInvoiceNumber(invoice.number);
+    if (norm !== '') out.push(norm);
   }
-  return '';
+  if ('receipt_number' in invoice && typeof invoice.receipt_number === 'string') {
+    const norm = normalizeInvoiceNumber(invoice.receipt_number);
+    if (norm !== '' && !out.includes(norm)) out.push(norm);
+  }
+  return out;
 }
 
 /** Normalize an invoice/receipt number a user typed from their email. */
@@ -557,9 +566,9 @@ async function completeCheckout(
       email = '';
     }
   }
-  // The receipt/invoice number the buyer already sees becomes the
-  // recovery credential: fetch the first invoice, store its display
-  // number. No footer hack, no new email content.
+  // The numbers the buyer already sees become the recovery
+  // credentials: fetch the first invoice, store its invoice number and
+  // receipt number. No footer hack, no new email content.
   const invoiceId =
     invoiceRef(obj) || latestInvoiceRef(result.json);
   const emailNorm = normalizeEmail(email);
@@ -567,12 +576,9 @@ async function completeCheckout(
     try {
       const invoice = await stripeApi(env, 'GET', `/invoices/${invoiceId}`);
       if (invoice.status === 200 && invoice.json !== null) {
-        await storeRecoveryInvoice(
-          db,
-          normalizeInvoiceNumber(invoiceDisplayNumber(invoice.json)),
-          emailNorm,
-          userId,
-        );
+        for (const norm of invoiceRecoveryNumbers(invoice.json)) {
+          await storeRecoveryInvoice(db, norm, emailNorm, userId);
+        }
       }
     } catch {
       // Activation already succeeded; a later invoice event retries.
@@ -625,18 +631,18 @@ async function subscriptionUpdated(
 }
 
 /**
- * Every paid invoice (first + renewals) becomes a recovery credential:
- * store its display number against the owning UID + email. Best-effort;
- * unknown customers just wait for a checkout event.
+ * Every paid invoice (first + renewals) becomes recovery credentials:
+ * its invoice number and receipt number are stored against the owning
+ * UID + email. Best-effort; unknown customers just wait for a checkout
+ * event.
  */
 async function recordPaidInvoice(
   env: StripeEnv,
   db: D1Db,
   invoice: unknown,
 ): Promise<void> {
-  const display = invoiceDisplayNumber(invoice);
-  const norm = normalizeInvoiceNumber(display);
-  if (norm === '') return;
+  const norms = invoiceRecoveryNumbers(invoice);
+  if (norms.length === 0) return;
   const customerId = customerRef(invoice);
   if (customerId === '') return;
   const userRow = await db
@@ -667,12 +673,14 @@ async function recordPaidInvoice(
   }
   const emailNorm = normalizeEmail(email);
   if (emailNorm === '') return;
-  await db
-    .prepare(
-      'INSERT INTO recovery_invoices (invoice_norm, email, user_id) VALUES (?, ?, ?) ON CONFLICT(invoice_norm) DO UPDATE SET email = excluded.email, user_id = excluded.user_id',
-    )
-    .bind(norm, emailNorm, userRow.user_id)
-    .run();
+  for (const norm of norms) {
+    await db
+      .prepare(
+        'INSERT INTO recovery_invoices (invoice_norm, email, user_id) VALUES (?, ?, ?) ON CONFLICT(invoice_norm) DO UPDATE SET email = excluded.email, user_id = excluded.user_id',
+      )
+      .bind(norm, emailNorm, userRow.user_id)
+      .run();
+  }
 }
 
 async function subscriptionDeleted(
@@ -764,7 +772,7 @@ export async function handleRecover(
   const invoiceRaw =
     body !== null &&
     (typeof body.invoiceNumber === 'string' || typeof body.receiptNumber === 'string')
-      ? `${body.invoiceNumber ?? ''}${body.receiptNumber ?? ''}`
+      ? `${typeof body.invoiceNumber === 'string' ? body.invoiceNumber : ''}${typeof body.receiptNumber === 'string' ? body.receiptNumber : ''}`
       : '';
   const newUserId =
     body !== null && typeof body.newUserId === 'string'

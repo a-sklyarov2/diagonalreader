@@ -143,6 +143,38 @@ function makeFakeDb() {
             attempts.delete(bound[0] as string);
             return {};
           }
+          if (q.startsWith('INSERT INTO usage') && q.includes('SELECT')) {
+            const toUser = bound[0] as string;
+            const fromUser = bound[1] as string;
+            if (toUser === fromUser) return {};
+            for (const [k, v] of usage) {
+              const sep = k.indexOf('|');
+              if (sep < 0 || k.slice(0, sep) !== fromUser) continue;
+              const rest = k.slice(sep + 1);
+              const nk = `${toUser}|${rest}`;
+              const cur = usage.get(nk);
+              if (cur) {
+                cur.free_used += v.free_used;
+                cur.paid_used += v.paid_used;
+              } else {
+                usage.set(nk, { ...v });
+                const moved = usage.get(nk)!;
+                usage.delete(k);
+                usage.set(nk, moved);
+              }
+            }
+            for (const k of [...usage.keys()]) {
+              if (k.startsWith(`${fromUser}|`)) usage.delete(k);
+            }
+            return {};
+          }
+          if (q.startsWith('DELETE FROM usage')) {
+            const victim = bound[0] as string;
+            for (const k of [...usage.keys()]) {
+              if (k.startsWith(`${victim}|`)) usage.delete(k);
+            }
+            return {};
+          }
           if (q.startsWith('INSERT INTO usage')) {
             const k = key(
               bound[0] as string,
@@ -696,6 +728,7 @@ describe('subscription recovery via invoice number', () => {
     userId: string,
     email: string,
     invoiceNorm: string,
+    receiptNorm = '24334817',
   ): Promise<void> {
     const sub = { ...subscriptionJson(), latest_invoice: 'in_123' };
     vi.stubGlobal('fetch', async (url: string) => {
@@ -704,7 +737,7 @@ describe('subscription recovery via invoice number', () => {
       }
       if (`${url}`.endsWith('/invoices/in_123')) {
         return new Response(
-          JSON.stringify({ id: 'in_123', number: '0F0KKPT7-0005', customer_email: email }),
+          JSON.stringify({ id: 'in_123', number: '0F0KKPT7-0005', receipt_number: '2433-4817', customer_email: email }),
           { status: 200 },
         );
       }
@@ -731,6 +764,10 @@ describe('subscription recovery via invoice number', () => {
     );
     expect(buy.status).toBe(200);
     expect(state.invoices.get(invoiceNorm)).toEqual({
+      email: email.toLowerCase(),
+      user_id: userId,
+    });
+    expect(state.invoices.get(receiptNorm)).toEqual({
       email: email.toLowerCase(),
       user_id: userId,
     });
@@ -775,6 +812,36 @@ describe('subscription recovery via invoice number', () => {
     expect((await getQuota(state.db, 'u-old', 100, sept)).unlimited).toBe(false);
   });
 
+  it('recovers with the receipt number and carries usage to the new UID', async () => {
+    const state = makeFakeDb();
+    const env = { ...baseEnv, DB: state.db };
+    await checkoutAndStoreInvoice(state, env, 'u-old', 'pay@example.com', '0F0KKPT70005');
+    await consumePage(state.db, 'u-old', 100, sept);
+    await consumePage(state.db, 'u-old', 100, sept);
+    await consumePage(state.db, 'u-old', 100, sept);
+    expect((await getQuota(state.db, 'u-old', 100, sept)).paidUsed).toBe(3);
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('recover must not touch Stripe');
+    });
+    const receipt = await worker.fetch(
+      new Request('https://api.test/stripe/recover', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'pay@example.com',
+          receiptNumber: '2433-4817',
+          newUserId: 'u-new',
+        }),
+      }),
+      env,
+    );
+    expect(receipt.status).toBe(200);
+    expect(await receipt.json()).toEqual({ recovered: true });
+    expect((await getQuota(state.db, 'u-new', 100, sept)).unlimited).toBe(true);
+    expect((await getQuota(state.db, 'u-new', 100, sept)).paidUsed).toBe(3);
+    expect((await getQuota(state.db, 'u-old', 100, sept)).paidUsed).toBe(0);
+    expect((await getQuota(state.db, 'u-old', 100, sept)).unlimited).toBe(false);
+  });
+
   it('records renewal invoices via invoice.paid', async () => {
     const state = makeFakeDb();
     const env = { ...baseEnv, DB: state.db };
@@ -789,6 +856,7 @@ describe('subscription recovery via invoice number', () => {
           object: {
             id: 'in_456',
             number: '0F0KKPT7-0006',
+            receipt_number: '2433-4818',
             customer: 'cus_123',
             customer_email: 'sub@example.com',
           },
@@ -798,6 +866,10 @@ describe('subscription recovery via invoice number', () => {
     );
     expect(paid.status).toBe(200);
     expect(state.invoices.get('0F0KKPT70006')).toEqual({
+      email: 'sub@example.com',
+      user_id: 'u-sub',
+    });
+    expect(state.invoices.get('24334818')).toEqual({
       email: 'sub@example.com',
       user_id: 'u-sub',
     });

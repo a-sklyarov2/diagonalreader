@@ -254,14 +254,15 @@ export async function deactivateSubscription(
 /**
  * Move a subscription from one device UID to another. Exactly one UID
  * stays active: any rows already on the target are cleared first.
- * Usage rows stay put (fresh guardrails on the new device, still
- * Stripe-bounded).
+ * Usage counters move with the subscription (same-day rows summed),
+ * so guardrails and remaining allowance survive the restore.
  */
 export async function transferSubscription(
   db: D1Db,
   fromUserId: string,
   toUserId: string,
 ): Promise<void> {
+  if (fromUserId === toUserId) return;
   await db
     .prepare('DELETE FROM subscriptions WHERE user_id = ?')
     .bind(toUserId)
@@ -269,6 +270,16 @@ export async function transferSubscription(
   await db
     .prepare('DELETE FROM stripe_customers WHERE user_id = ?')
     .bind(toUserId)
+    .run();
+  await db
+    .prepare(
+      'INSERT INTO usage (user_id, month, day, free_used, paid_used) SELECT ?, month, day, free_used, paid_used FROM usage WHERE user_id = ? ON CONFLICT(user_id, month, day) DO UPDATE SET free_used = usage.free_used + excluded.free_used, paid_used = usage.paid_used + excluded.paid_used',
+    )
+    .bind(toUserId, fromUserId)
+    .run();
+  await db
+    .prepare('DELETE FROM usage WHERE user_id = ?')
+    .bind(fromUserId)
     .run();
   await db
     .prepare('UPDATE subscriptions SET user_id = ? WHERE user_id = ?')
