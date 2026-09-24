@@ -5,7 +5,7 @@
  * GET /              → minimal landing page (PWA lives on app.*).
  */
 
-export const EFFECTIVE_DATE = '23 September 2026';
+export const EFFECTIVE_DATE = '24 September 2026';
 
 export const privacyPolicyHtml = `<!doctype html>
 <html lang="en">
@@ -44,7 +44,7 @@ only for subscribers. Clearing site data resets it.</li>
 <li><strong>Purchase information.</strong> Subscriptions are sold and
 billed by Stripe. We receive only the fact that a subscription is
 active (plus price and expiry timestamps) — never your payment
-details. Subscribers' purchase email and invoice/receipt numbers are
+details. Subscribers' purchase email and invoice numbers are
 stored alongside the Stripe customer link; restoring moves access so
 exactly one device ID is active per subscription.</li>
 <li><strong>Page counters.</strong> Monthly and daily counters linked to
@@ -60,11 +60,11 @@ recover your subscription. The camera is used only when you tap
 the shutter; no photos are taken in the background.</p>
 
 <h2>Subscription recovery</h2>
-<p>Subscribers' purchase email and invoice/receipt numbers are stored
+<p>Subscribers' purchase email and invoice numbers are stored
 alongside the Stripe customer link and used only to restore Unlimited
-on a new device: enter your purchase email plus any invoice or receipt
-number from a payment email. Restoring moves access: exactly one device
-ID is active per subscription.</p>
+on a new device: enter your purchase email and an invoice number from
+a Stripe subscription invoice. Restoring moves access: exactly one
+device ID is active per subscription.</p>
 
 <h2>Third parties</h2>
 <ul>

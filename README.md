@@ -64,15 +64,15 @@ printf '%s' "$WHSEC" | npx wrangler secret put STRIPE_WEBHOOK_SECRET
    127.0.0.1:8787/stripe/webhook` while deploying with test-mode keys.
    No publishable key needed (no Stripe.js; redirect-to-URL flow).
 5. In Dashboard Settings → Business → Customer emails, enable
-   Successful payments so buyers keep getting payment emails (any
-   invoice/receipt number in them restores access).
+   Successful payments so buyers receive payment emails. Recovery
+   uses the number printed on their Stripe subscription invoice.
 6. Apply the recovery migration everywhere the schema runs:
    `npx wrangler d1 migrations apply diagonal --local` and `--remote`.
 
 ## Subscription recovery (no login, no outbound email)
-The webhook stores every paid invoice/receipt number against the paying
-UID + purchase email. On a new/wiped device, Library →
-`Already subscribed? Restore access` takes purchase email + any invoice
-or receipt number from a payment email (e.g. `2433-4817`,
+The webhook stores each paid subscription invoice number against the
+paying UID + purchase email. On a new/wiped device, Library →
+`Already subscribed? Restore access` takes the purchase email and an
+invoice number from a Stripe invoice for that subscription (e.g.
 `0F0KKPT7-0005`) and moves Unlimited to the current UID (exactly one
 active UID; invoice numbers never expire or rotate).

@@ -93,7 +93,7 @@ export class LibraryView {
     const hint = document.createElement('p');
     hint.className = 'dialog-line';
     hint.textContent =
-      'Enter your purchase email plus any invoice or receipt number from a payment email (e.g. 2433-4817 or 0F0KKPT7-0005).';
+      'Enter your purchase email and an invoice number from a Stripe invoice for this subscription (e.g. 0F0KKPT7-0005). The number appears on the invoice PDF or hosted invoice page.';
     const email = document.createElement('input');
     email.className = 'library-input';
     email.type = 'email';
@@ -102,7 +102,7 @@ export class LibraryView {
     const invoice = document.createElement('input');
     invoice.className = 'library-input';
     invoice.type = 'text';
-    invoice.placeholder = 'Invoice or receipt number';
+    invoice.placeholder = 'Invoice number';
     invoice.autocomplete = 'off';
     const row = document.createElement('div');
     row.className = 'dialog-actions';
@@ -461,8 +461,7 @@ export class LibraryView {
     const p = document.createElement('p');
     p.className = 'library-muted';
     p.textContent =
-      'Your subscription is tied to this device. To restore it elsewhere you need your purchase email ' +
-      'plus any invoice or receipt number from a payment email — no need to save anything extra.';
+      'On a new device, enter your purchase email and an invoice number shown on a Stripe invoice for this subscription.';
     wrap.append(title, p);
     return wrap;
   }
