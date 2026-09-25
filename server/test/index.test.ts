@@ -111,7 +111,10 @@ describe('fetch router', () => {
       env,
     );
     expect(landing.status).toBe(200);
-    expect(await landing.text()).toContain('/privacy-policy');
+    expect(landing.headers.get('content-type')).toContain('text/html');
+    const landingText = await landing.text();
+    expect(landingText).toContain('/privacy-policy');
+    expect(landingText).toMatch(/<a\b[^>]*\bhref="https:\/\/app\.diagonalreader\.com\/"/);
   });
 
   it('serves the data-deletion page', async () => {
@@ -123,6 +126,68 @@ describe('fetch router', () => {
     const text = await res.text();
     expect(text).toContain('(automatic)');
     expect(text).not.toContain('mailto:');
+  });
+
+  it('redirects HTTP apex root to HTTPS with its query', async () => {
+    const res = await worker.fetch(
+      new Request('http://diagonalreader.com/?utm_source=smoke'),
+      env,
+    );
+    expect(res.status).toBe(308);
+    expect(res.headers.get('location')).toBe('https://diagonalreader.com/?utm_source=smoke');
+  });
+
+  it('sends headers but no document body for HEAD on the apex root', async () => {
+    const res = await worker.fetch(
+      new Request('https://diagonalreader.com/', { method: 'HEAD' }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe('');
+  });
+
+  it('passes the app root to assets without passing the apex root', async () => {
+    const fetchAsset = vi.fn(async (_request: Request) => new Response('sentinel PWA shell'));
+    const withAssets = { ...env, ASSETS: { fetch: fetchAsset } };
+    const apex = await worker.fetch(new Request('https://diagonalreader.com/'), withAssets);
+    expect(apex.status).toBe(200);
+    expect(fetchAsset).not.toHaveBeenCalled();
+
+    const appRequest = new Request('https://app.diagonalreader.com/');
+    const app = await worker.fetch(appRequest, withAssets);
+    expect(await app.text()).toBe('sentinel PWA shell');
+    expect(fetchAsset).toHaveBeenCalledOnce();
+    expect(fetchAsset).toHaveBeenCalledWith(appRequest);
+  });
+
+  it('retires only the apex service worker, leaving the app worker in assets', async () => {
+    const fetchAsset = vi.fn(async (_request: Request) => new Response('sentinel Workbox worker'));
+    const withAssets = { ...env, ASSETS: { fetch: fetchAsset } };
+    const apex = await worker.fetch(new Request('https://diagonalreader.com/sw.js'), withAssets);
+    expect(apex.status).toBe(200);
+    expect(apex.headers.get('content-type')).toContain('application/javascript');
+    expect(apex.headers.get('cache-control')).toBe('no-store');
+    expect(fetchAsset).not.toHaveBeenCalled();
+
+    const apexHead = await worker.fetch(
+      new Request('https://diagonalreader.com/sw.js', { method: 'HEAD' }),
+      withAssets,
+    );
+    expect(apexHead.headers.get('content-type')).toContain('application/javascript');
+    expect(await apexHead.text()).toBe('');
+
+    const appRequest = new Request('https://app.diagonalreader.com/sw.js');
+    const app = await worker.fetch(appRequest, withAssets);
+    expect(await app.text()).toBe('sentinel Workbox worker');
+    expect(fetchAsset).toHaveBeenCalledOnce();
+    expect(fetchAsset).toHaveBeenCalledWith(appRequest);
+  });
+
+  it('reports a missing asset binding instead of serving the landing to app users', async () => {
+    const res = await worker.fetch(new Request('https://app.diagonalreader.com/'), env);
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe('server misconfigured: missing ASSETS binding');
   });
 
   it('summarizes without any auth header', async () => {

@@ -7,7 +7,7 @@ compatibility_date = "2026-09-01"
 account_id = "3a3c78db80d271226caeb10f8ba124e8"
 
 # Custom domains (zone_id is a public DNS identifier, not a secret).
-# Apex serves the landing + /privacy-policy; api.* serves the app API.
+# Apex serves the landing and legal pages; app.* serves the PWA, api.* the API.
 # workers.dev stays enabled so already-shipped builds keep working.
 routes = [
   { pattern = "diagonalreader.com/*", zone_id = "7e4cdb7f0a9e53b7bf33cdca22d8923b" },
@@ -19,13 +19,13 @@ routes = [
 MODEL = "google/gemini-3.5-flash-lite"
 STRIPE_PRICE_MONTHLY = "price_1UHspeLpGV9Non9OtQjzQ0II"
 
-# PWA shell + API on one Worker (same-origin, no CORS): static assets
-# are served first, API paths fall through to src/index.ts, unknown
-# navigation falls back to index.html.
+# PWA assets serve app.* by default; worker-first routes handle the
+# apex landing, legal pages, and API, then pass app.* roots through ASSETS.
 [assets]
 directory = "../pwa/dist"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/summarize", "/quota", "/stripe/*", "/health", "/privacy-policy", "/data-deletion"]
+run_worker_first = ["/", "/sw.js", "/summarize", "/quota", "/stripe/*", "/health", "/privacy-policy", "/data-deletion"]
 
 # Page-quota database. database_id comes from `wrangler d1 create
 # diagonal` (run once); migrations/ is applied with

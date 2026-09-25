@@ -16,11 +16,11 @@
  * POST /stripe/recover { email, invoiceNumber, newUserId } → { recovered: true } (restore on new device).
  * POST /stripe/webhook (Stripe-signed) → activates/deactivates access.
  * GET /health → { ok: true, model }
- * GET /privacy-policy, GET /data-deletion, GET / → static pages.
+ * GET /privacy-policy, GET /data-deletion → static pages.
+ * GET / → apex landing or app PWA; GET /sw.js → apex retirement worker or app asset.
  *
- * Same-origin: the PWA is served from this Worker's static assets,
- * so there is no CORS and no proxy-token auth — the bundle is
- * public, and quota-per-user-ID plus Stripe is the abuse control.
+ * The app PWA and API share a Worker and origin, so there is no CORS
+ * or proxy-token auth — quota-per-user-ID plus Stripe is the abuse control.
  *
  * NOTE: only a default export here — extra value exports break the
  * Workers runtime. Shared code lives in summarize.ts / quota.ts /
@@ -31,7 +31,7 @@
  * Vars (wrangler.toml [vars]):
  *   MODEL, OPENROUTER_BASE (default https://openrouter.ai/api/v1),
  *   STRIPE_PRICE_MONTHLY (price ids are not secret)
- * Binding: D1 database `diagonal` as DB (see migrations/).
+ * Bindings: D1 database `diagonal` as DB (see migrations/) and static ASSETS.
  */
 
 import {
@@ -49,11 +49,28 @@ import {
 } from './stripe';
 import { deletionHtml, landingHtml, privacyPolicyHtml } from './site';
 
-function html(body: string): Response {
-  return new Response(body, {
+type AssetBinding = { fetch(request: Request): Promise<Response> };
+
+function asset(request: Request, binding: AssetBinding | undefined): Promise<Response> | Response {
+  if (!binding) {
+    return new Response('server misconfigured: missing ASSETS binding', { status: 500 });
+  }
+  return binding.fetch(request);
+}
+
+function html(body: string, head = false): Response {
+  return new Response(head ? null : body, {
     headers: { 'content-type': 'text/html; charset=utf-8' },
   });
 }
+
+const apexRetirementWorker = `self.addEventListener('install', event => {
+  event.waitUntil(self.skipWaiting());
+});
+self.addEventListener('activate', event => {
+  event.waitUntil(self.clients.claim().then(() => self.registration.unregister()));
+});
+`;
 async function quotaJson(
   db: Env['DB'],
   url: URL,
@@ -76,7 +93,7 @@ async function quotaJson(
 export default {
   async fetch(
     request: Request,
-    env: Env & StripeEnv,
+    env: Env & StripeEnv & { ASSETS?: AssetBinding },
   ): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') {
@@ -118,11 +135,28 @@ export default {
     if (request.method === 'GET' && url.pathname === '/data-deletion') {
       return html(deletionHtml);
     }
-    if (request.method === 'GET' && url.pathname === '/') {
-      return html(landingHtml);
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/') {
+      if (url.hostname === 'diagonalreader.com' && url.protocol === 'http:') {
+        url.protocol = 'https:';
+        return Response.redirect(url.toString(), 308);
+      }
+      if (url.hostname === 'diagonalreader.com' || url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        return html(landingHtml, request.method === 'HEAD');
+      }
+      return asset(request, env.ASSETS);
     }
-    // Anything else (PWA shell, hashed JS/CSS, icons, service
-    // worker) is served from static assets before this Worker runs.
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/sw.js') {
+      if (url.hostname === 'diagonalreader.com') {
+        return new Response(request.method === 'HEAD' ? null : apexRetirementWorker, {
+          headers: {
+            'content-type': 'application/javascript; charset=utf-8',
+            'cache-control': 'no-store',
+          },
+        });
+      }
+      return asset(request, env.ASSETS);
+    }
+    // Other PWA assets are served before this Worker runs.
     return new Response('Not found', { status: 404 });
   },
 };

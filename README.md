@@ -5,8 +5,10 @@ style-preserving summary in the page's own language → next page.
 History scrolls vertically, TikTok-style; red bin deletes summaries.
 
 Compression toggle: Low / High / Max. Model: `google/gemini-3.5-flash-lite`.
-PWA at `https://app.diagonalreader.com`; same Worker serves the app
-shell and the API (same-origin, no CORS).
+Landing page at `https://diagonalreader.com/` links to the PWA at
+`https://app.diagonalreader.com/`. The same Worker serves the app shell
+and API on app.* (same-origin, no CORS), plus the apex legal pages.
+The apex `/sw.js` retires old PWA registrations without clearing browser storage.
 
 ## Architecture
 - **PWA** (`pwa/`, vanilla TS + Vite): camera → downscale (1600px/q75)
@@ -29,11 +31,16 @@ cd pwa && npm install && npm run dev   # http://127.0.0.1:5173, proxies /quota /
 cd server && npm install && npm test && npm run typecheck
 printf 'OPENROUTER_KEY=%s\nSTRIPE_SECRET_KEY=%s\nSTRIPE_WEBHOOK_SECRET=%s\nSTRIPE_PRICE_MONTHLY=%s\n' \
   "$OR_KEY" "$SK" "$WHSEC" "$PRICE" > .dev.vars  # gitignored, never commit
-npx wrangler dev                       # local http://127.0.0.1:8787
+npx wrangler dev --local --host 127.0.0.1  # landing preview at http://127.0.0.1:8787/
 npx wrangler d1 migrations apply diagonal --local   # after pulling migrations
 ```
 
-End-to-end (real model, real spend): `npx wrangler dev` (server dir),
+Wrangler's local proxy uses its configured host for the Worker URL even
+when curl sends a different `Host` header. Restart with
+`--host app.diagonalreader.com` to check the built PWA root and Workbox worker;
+the 127.0.0.1 override keeps the landing preview on HTTP without redirecting.
+
+End-to-end (real model, real spend): run the Worker command above (server dir),
 `npm run dev` (pwa dir), open the PWA, tap "Use sample page photo"
 (`pwa/e2e-fixtures/page1.jpg`, also shipped at
 `public/e2e-fixtures/page1.jpg` for the built bundle).
@@ -76,3 +83,5 @@ paying UID + purchase email. On a new/wiped device, Library →
 invoice number from a Stripe invoice for that subscription (e.g.
 `0F0KKPT7-0005`) and moves Unlimited to the current UID (exactly one
 active UID; invoice numbers never expire or rotate).
+Apex-local history and anonymous IDs do not move to app.*; existing
+subscribers can use this recovery flow after switching hosts.
