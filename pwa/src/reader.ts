@@ -2,7 +2,7 @@
 
 import type { Level } from './api';
 import { Billing } from './billing';
-import { getTextSize, getVoice, onPrefsChange, TEXT_SIZES } from './prefs';
+import { getTextSize, getVoice, onPrefsChange, setLevel, TEXT_SIZES } from './prefs';
 import { ReadingSession } from './session';
 import type { SummaryPage } from './session';
 import { snackbar } from './ui';
@@ -227,6 +227,8 @@ export class ReaderView {
         pop.classList.remove('open');
         const page = this.pages[this.current];
         if (page) {
+          // Becomes the default for subsequent captures too.
+          setLevel(level);
           this.gated(() =>
             this.session.resummarize(page, level, getVoice()),
           );

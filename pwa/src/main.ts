@@ -59,25 +59,30 @@ async function boot(): Promise<void> {
     library.mount();
   };
 
+  // The camera view persists while the reader is open (stream kept
+  // warm) so "Next page" returns instantly — no getUserMedia restart.
   const showCamera = (): void => {
     reader?.destroy();
     reader = null;
-    camera?.destroy();
-    camera = new CameraView(
-      app,
-      session,
-      billing,
-      (_page, index) => showReader(index),
-      () => showLibrary(),
-      {
-        fetchFixture: async () => {
-          const res = await fetch(FIXTURE_URL);
-          if (!res.ok) throw new ApiError(res.status, 'fixture missing');
-          return res.blob();
+    if (camera) {
+      camera.show();
+    } else {
+      camera = new CameraView(
+        app,
+        session,
+        billing,
+        (_page, index) => showReader(index),
+        () => showLibrary(),
+        {
+          fetchFixture: async () => {
+            const res = await fetch(FIXTURE_URL);
+            if (!res.ok) throw new ApiError(res.status, 'fixture missing');
+            return res.blob();
+          },
         },
-      },
-    );
-    camera.mount();
+      );
+      camera.mount();
+    }
     void billing.refreshQuota();
   };
 
@@ -86,8 +91,8 @@ async function boot(): Promise<void> {
       showCamera();
       return;
     }
-    camera?.destroy();
-    camera = null;
+    // Keep the camera alive behind the reader for instant return.
+    camera?.hide();
     reader?.destroy();
     reader = new ReaderView(
       app,

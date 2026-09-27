@@ -3,7 +3,7 @@
 import { ApiError } from './api';
 import type { Level } from './api';
 import { Billing } from './billing';
-import { getVoice } from './prefs';
+import { getLevel, getVoice, setLevel } from './prefs';
 import { ReadingSession } from './session';
 import type { SummaryPage } from './session';
 import { snackbar } from './ui';
@@ -18,7 +18,7 @@ export class CameraView {
   private root: HTMLElement;
   private video: HTMLVideoElement | null = null;
   private stream: MediaStream | null = null;
-  private level: Level = 'high';
+  private level: Level = getLevel();
   private capturing = false;
   private ready = false;
   private cameraError: string | null = null;
@@ -26,6 +26,17 @@ export class CameraView {
   private pillVisible = false;
   private unsubBilling: (() => void) | null = null;
   private destroyed = false;
+  /** Hidden (reader open) keeps the stream warm for instant return. */
+  private hidden = false;
+  private starting = false;
+  /** No camera hardware — demo fallback, never auto-retried. */
+  private noDevice = false;
+  private onVisibility = (): void => {
+    if (document.visibilityState === 'visible') void this.recoverIfNeeded();
+  };
+  private onPageShow = (): void => {
+    void this.recoverIfNeeded();
+  };
   constructor(
     private app: HTMLElement,
     private session: ReadingSession,
@@ -48,14 +59,75 @@ export class CameraView {
     this.syncPill();
     void this.billing.refreshQuota();
     void this.initCamera();
+    // Phone lock / app switch ends tracks or stalls the element —
+    // recover on return instead of requiring a full reload.
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('pageshow', this.onPageShow);
   }
 
   destroy(): void {
     this.destroyed = true;
     this.unsubBilling?.();
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pageshow', this.onPageShow);
     this.stopStream();
     this.root.remove();
   }
+  /** Reader opened: hide UI but keep the stream warm. */
+  hide(): void {
+    this.hidden = true;
+    this.root.style.display = 'none';
+  }
+
+  /** Back from reader: instant preview, no getUserMedia round-trip. */
+  show(): void {
+    this.hidden = false;
+    this.root.style.display = '';
+    // Level may have changed via Reader resummarize while hidden.
+    this.level = getLevel();
+    if (this.cameraError !== null && !this.noDevice) {
+      // Views now persist, so a past transient failure (camera busy,
+      // briefly denied) would otherwise never retry — retry on
+      // explicit return instead of bricking the camera.
+      this.cameraError = null;
+      this.ready = false;
+      this.render();
+      void this.initCamera();
+      return;
+    }
+    this.syncPill();
+    this.render();
+    void this.recoverIfNeeded();
+  }
+
+  /**
+   * Restart a dead camera (phone lock / app switch ends tracks or
+   * suspends them muted). No-op while hidden/destroyed/starting, on
+   * healthy streams, and on no-camera devices (demo fallback).
+   */
+  private async recoverIfNeeded(): Promise<void> {
+    if (this.destroyed || this.hidden || this.starting) return;
+    const tracks = this.stream?.getVideoTracks() ?? [];
+    if (tracks.some((t) => t.readyState === 'live' && !t.muted)) {
+      // Live tracks but a stalled element after OS resume — nudge
+      // playback instead of a full restart.
+      if (this.video) {
+        try {
+          await this.video.play();
+        } catch {
+          // Autoplay fussiness — user tap retries via capture path.
+        }
+      }
+      return;
+    }
+    if (!this.stream && (this.noDevice || this.cameraError !== null)) return;
+    this.stopStream();
+    this.ready = false;
+    this.cameraError = null;
+    this.render();
+    await this.initCamera();
+  }
+
 
   refresh(): void {
     if (this.destroyed) return;
@@ -71,6 +143,8 @@ export class CameraView {
   }
 
   private async initCamera(): Promise<void> {
+    if (this.starting || this.destroyed) return;
+    this.starting = true;
     try {
       // Ask for 1080p but keep the native landscape stream: the
       // capture path is a canvas grab of these exact frames, so
@@ -91,6 +165,13 @@ export class CameraView {
         throw new Error('no video track');
       }
       this.stream = stream;
+      this.noDevice = false;
+      for (const track of stream.getVideoTracks()) {
+        // OS lock / app switch ends tracks — recover on return.
+        track.addEventListener('ended', () => {
+          if (!this.destroyed) void this.recoverIfNeeded();
+        });
+      }
       this.ready = true;
       // Book pages need near-focus locked continuously; without this
       // some phones sit at hyperfocal/infinity and text never sharpens.
@@ -106,7 +187,10 @@ export class CameraView {
         name === 'NotFoundError' ||
         name === 'OverconstrainedError' ||
         /not found|no video track/i.test(msg);
+      this.noDevice = noDevice;
       this.cameraError = noDevice ? null : msg;
+    } finally {
+      this.starting = false;
     }
     this.render();
   }
@@ -305,6 +389,7 @@ export class CameraView {
         btn.setAttribute('aria-pressed', `${this.level === level}`);
         btn.addEventListener('click', () => {
           this.level = level;
+          setLevel(level);
           this.render();
         });
         seg.appendChild(btn);
