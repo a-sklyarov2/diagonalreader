@@ -17,7 +17,7 @@ routes = [
 
 [vars]
 MODEL = "google/gemini-3.5-flash-lite"
-STRIPE_PRICE_MONTHLY = "price_1UHspeLpGV9Non9OtQjzQ0II"
+STRIPE_PRICE_MONTHLY = "price_1UKOnCLjhCL6EMfT12Z2jay9"
 
 # PWA assets serve app.* by default; worker-first routes handle the
 # apex landing, legal pages, and API, then pass app.* roots through ASSETS.
